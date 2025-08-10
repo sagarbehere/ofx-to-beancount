@@ -1,8 +1,10 @@
 # OFX to Beancount Converter
 
-Convert OFX (Open Financial Exchange) files to Beancount format with intelligent ML-based transaction categorization. All data processing happens locally and the program can run fully offline. No external services or Internet connection are needed.
+Convert transactions in OFX (Open Financial Exchange) files to [Beancount](https://github.com/beancount/beancount) format with ML-based transaction categorization. All data processing happens locally. No external services or Internet connection are needed.
 
 Inspired by [Reckon](https://github.com/cantino/reckon).
+
+DISCLAIMER: Has _ONLY_ been tested on a couple of financial institutions that I personally use for bank accounts and credit cards.
 
 ## Features
 
