@@ -1,0 +1,85 @@
+; Example training data for ML categorization
+; This file contains sample transactions to train the classifier
+; Replace with your actual transaction history for better results
+
+2023-01-15 * "SAFEWAY" "Weekly grocery shopping"
+  Expenses:Food:Groceries           128.45 USD
+  Assets:Chase:Checking            -128.45 USD
+
+2023-01-18 * "SHELL" "Gas station fill-up"
+  Expenses:Transportation:Gas        52.30 USD
+  Liabilities:Amex:BlueCashPreferred -52.30 USD
+
+2023-01-20 * "AMAZON.COM" "Online shopping - household items"
+  Expenses:Household                 87.60 USD
+  Liabilities:Amex:BlueCashPreferred -87.60 USD
+
+2023-01-22 * "STARBUCKS" "Morning coffee"
+  Expenses:Food:Coffee               12.85 USD
+  Liabilities:Amex:BlueCashPreferred -12.85 USD
+
+2023-01-25 * "NETFLIX" "Monthly subscription"
+  Expenses:Entertainment:Streaming   15.99 USD
+  Assets:Chase:Checking             -15.99 USD
+
+2023-01-28 * "WHOLE FOODS" "Organic groceries"
+  Expenses:Food:Groceries           156.78 USD
+  Liabilities:Amex:BlueCashPreferred -156.78 USD
+
+2023-02-01 * "RESTAURANT XYZ" "Dinner with friends"
+  Expenses:Entertainment:Dining      89.50 USD
+  Liabilities:Amex:BlueCashPreferred -89.50 USD
+
+2023-02-03 * "CHEVRON" "Gas station"
+  Expenses:Transportation:Gas        48.75 USD
+  Assets:Chase:Checking             -48.75 USD
+
+2023-02-05 * "TARGET" "Household supplies"
+  Expenses:Household                 45.32 USD
+  Expenses:Personal:Clothing         32.18 USD
+  Liabilities:Amex:BlueCashPreferred -77.50 USD
+
+2023-02-08 * "UBER" "Ride to airport"
+  Expenses:Transportation:Rideshare  28.50 USD
+  Liabilities:Amex:BlueCashPreferred -28.50 USD
+
+2023-02-10 * "KROGER" "Weekly groceries"
+  Expenses:Food:Groceries           134.22 USD
+  Assets:Chase:Checking            -134.22 USD
+
+2023-02-12 * "COSTCO GAS" "Bulk gas purchase"
+  Expenses:Transportation:Gas        65.40 USD
+  Liabilities:Amex:BlueCashPreferred -65.40 USD
+
+2023-02-15 * "MOVIE THEATER" "Weekend entertainment"
+  Expenses:Entertainment:Movies      24.50 USD
+  Expenses:Food:Snacks              18.75 USD
+  Liabilities:Amex:BlueCashPreferred -43.25 USD
+
+2023-02-18 * "PHARMACY" "Prescription medication"
+  Expenses:Healthcare:Pharmacy       25.00 USD
+  Assets:Chase:Checking             -25.00 USD
+
+2023-02-20 * "COFFEE SHOP" "Work meeting coffee"
+  Expenses:Food:Coffee               8.45 USD
+  Liabilities:Amex:BlueCashPreferred -8.45 USD
+
+2023-02-22 * "BOOKSTORE" "Technical books"
+  Expenses:Education:Books           67.80 USD
+  Liabilities:Amex:BlueCashPreferred -67.80 USD
+
+2023-02-25 * "ITALIAN RESTAURANT" "Date night dinner"
+  Expenses:Entertainment:Dining     125.60 USD
+  Liabilities:Amex:BlueCashPreferred -125.60 USD
+
+2023-02-28 * "GROCERY OUTLET" "Budget grocery shopping"
+  Expenses:Food:Groceries           89.30 USD
+  Assets:Chase:Checking             -89.30 USD
+
+2023-03-01 * "SPOTIFY" "Music streaming subscription"
+  Expenses:Entertainment:Music       9.99 USD
+  Assets:Chase:Checking             -9.99 USD
+
+2023-03-05 * "GAS STATION" "Road trip fuel"
+  Expenses:Transportation:Gas        72.15 USD
+  Assets:Chase:Checking             -72.15 USD

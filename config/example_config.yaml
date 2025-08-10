@@ -1,0 +1,39 @@
+# Example configuration for OFX to Beancount converter
+# Copy this file and customize for your financial accounts
+
+accounts:
+  mappings:
+    # American Express Blue Cash Preferred card
+    - institution: "AMEX"
+      account_type: ""
+      account_id: "9OIB5AB8SY32XLB|12007"
+      beancount_account: "Liabilities:Amex:BlueCashPreferred"
+      currency: "USD"
+    
+    # Chase Sapphire Reserve card
+    - institution: "CHASE"
+      account_type: "CREDITLINE"
+      account_id: "4512000000000000"
+      beancount_account: "Liabilities:Chase:SapphireReserve"
+      currency: "USD"
+    
+    # Chase checking account
+    - institution: "CHASE"
+      account_type: "CHECKING"
+      account_id: "1234567890"
+      beancount_account: "Assets:Chase:Checking"
+      currency: "USD"
+    
+    # Bank of America savings account
+    - institution: "BANKOFAMERICA"
+      account_type: "SAVINGS"
+      account_id: "9876543210"
+      beancount_account: "Assets:BankOfAmerica:Savings"
+      currency: "USD"
+
+# Default currency for transactions without explicit currency
+default_currency: "USD"
+
+# Default account to use when training data is unavailable for ML categorization
+# This account will be used for all transactions when the ML classifier cannot be trained
+default_account_when_training_unavailable: "Expenses:Unknown"
