@@ -191,7 +191,7 @@ Run in server-only mode for integration with GUI applications (that may be built
 python ofx_converter.py -s -i file.ofx -c config.yaml -a accounts.beancount
 ```
 
-The API will be available at (assuming default port number 8000, adjust accordingy to your usage):
+The API will be available at (assuming default port number 8000, adjust according to your usage):
 - **Base URL**: http://localhost:8000
 - **Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
