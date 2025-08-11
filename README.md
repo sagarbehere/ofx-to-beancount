@@ -12,7 +12,7 @@ DISCLAIMER: Has _ONLY_ been tested on a couple of financial institutions that I 
 - **Interactive Review** - Rich CLI interface for reviewing and correcting predicted categorizations
 - **Duplicate Detection** - Identifies potential duplicates using fuzzy string matching
 - **Transaction Splitting** - Split transactions across multiple categories
-- **Transaction Skipping** - Skip transactions so they are not included in the output
+- **Transaction Skipping** - Skip transactions if needed so they are not included in the output
 
 ## Installation
 
@@ -23,7 +23,7 @@ DISCLAIMER: Has _ONLY_ been tested on a couple of financial institutions that I 
 
 ### Install Dependencies
 
-It's recommended to do the installation in a Python virtual environment.
+It's recommended to do the installation in a **Python virtual environment**.
 
 ```bash
 git clone git@github.com:sagarbehere/ofx-to-beancount.git
@@ -53,7 +53,7 @@ The main dependencies are:
 
 Copy and adjust the example file found in `config/example_config.yaml`.
 
-To help the program guess the right Beancount account and currency from the OFX file, you should provide account mapping configuration in the config file. For example, if you have downloaded OFX statements from American Express and Bank of America, let's call them `amex.ofx` and `bofa-checking.ofx`, you could do a one-time interactive exploration of those files in a Python REPL as shown below. The resulting information will help you to create the correct config file.
+To help the program guess the right Beancount account and currency from the OFX file, you should provide account mapping configuration in the config file. For example, if you have downloaded OFX statements from American Express and Bank of America, let's call them `amex.ofx` and `bofa-checking.ofx`, you could do a one-time interactive exploration of those files in a Python REPL as shown below. The resulting information will help you to create the correct config file, as shown further below.
 
 ```
 (beancount) sagar@Sagars-MacBook-Pro Downloads % python3
@@ -91,18 +91,6 @@ This will then correspond to the following account mappings in your config file
 ```yaml
 # config.yaml
 
-# Optional file paths - can be overridden by command line arguments
-files:
-  input_file: "/path/to/your/statement.ofx"
-  learning_data_file: "/path/to/your/training.beancount"
-  output_file: "/path/to/your/output.beancount"
-  account_file: "/path/to/your/accounts.beancount"
-
-# Optional server settings - can be overridden by command line arguments
-server:
-  port_num: 8000
-  server_only: false
-
 # Required account mappings
 accounts:
   mappings:
@@ -119,13 +107,7 @@ accounts:
       account_id: "123456789012"
       beancount_account: "Assets:BofA:Checking"
       currency: "USD"
- 
-# Default currency for transactions without explicit currency
-default_currency: "USD"
 
-# Default account to use when training data is unavailable for ML categorization
-# This account will be used for all transactions when the ML classifier cannot be trained
-default_account_when_training_unavailable: "Expenses:Unknown"
 ```
 
 NOTE: You'll need to decide the value of `beancount_account` to whatever account name string you are using.
@@ -163,13 +145,13 @@ python ofx_converter.py \
 python ofx_converter.py [OPTIONS]
 
 Options:
-  -i, --input-file PATH        OFX file to process [required if not in config]
-  -l, --learning-data-file PATH Beancount file for training data [optional, can be in config]
-  -o, --output-file PATH       Output Beancount file (appends if exists) [required, can be in config]
-  -a, --account-file PATH      Full Beancount file with open directives [optional, can be in config]
+  -i, --input-file PATH        OFX file to process [required if not in config file]
+  -l, --learning-data-file PATH Beancount file for training data [optional, can be in config file]
+  -o, --output-file PATH       Output Beancount file (appends if exists) [required, can be in config file]
+  -a, --account-file PATH      Full Beancount file with open directives [optional, can be in config file]
   -c, --config-file PATH       YAML configuration file [required]
-  -p, --port-num INTEGER       Port number for API server (default: 8000, can be in config)
-  -s, --server-only            Run only the API server (for GUI client use) [can be in config]
+  -p, --port-num INTEGER       Port number for API server (default: 8000, can be in config file)
+  -s, --server-only            Run only the API server (for GUI client use) [can be in config file]
   --help                       Show this message and exit
 ```
 
@@ -188,7 +170,6 @@ The system trains on existing Beancount transactions. It extracts:
 - Accounts in the transaction postings as labels
 - Uses TF-IDF Vectorization and a Random Forest Classifier
 - Predictions with a confidence of >= 90% are displayed in green color. Predictions with a confidence <= 20% are displayed in red color. The rest are shown in yellow-ish/orange color
-- Requires minimum 10 transactions with at least 2 different categories
 
 ## Duplicate Detection
 
@@ -202,7 +183,7 @@ A transaction flagged as a duplicate can be skipped, which will prevent it from 
 
 ## API Mode
 
-Run in server-only mode for integration with GUI applications (that may be built in the future to complement the current CLI client):
+Run in server-only mode for integration with GUI applications (that may be built in the future to complement the current CLI client): For example
 
 ```bash
 python ofx_converter.py -s -i file.ofx -c config.yaml -a accounts.beancount
