@@ -19,7 +19,7 @@ accounts:
     # American Express Blue Cash Preferred card
     - institution: "AMEX"
       account_type: ""
-      account_id: "9OIB5AB8SY32XLB|12007"
+      account_id: "123ABCD456EFGHI|12345"
       beancount_account: "Liabilities:Amex:BlueCashPreferred"
       currency: "USD"
     
