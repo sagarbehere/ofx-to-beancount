@@ -1,6 +1,19 @@
 # Example configuration for OFX to Beancount converter
 # Copy this file and customize for your financial accounts
 
+# Optional file paths - can be overridden by command line arguments
+files:
+  input_file: "/path/to/input.ofx"
+  learning_data_file: "/path/to/training.beancount"
+  output_file: "/path/to/output.beancount"
+  account_file: "/path/to/accounts.beancount"
+
+# Optional server settings - can be overridden by command line arguments
+server:
+  port_num: 8000
+  server_only: false
+
+# Required account mappings
 accounts:
   mappings:
     # American Express Blue Cash Preferred card
@@ -31,6 +44,7 @@ accounts:
       beancount_account: "Assets:BankOfAmerica:Savings"
       currency: "USD"
 
+# Required defaults
 # Default currency for transactions without explicit currency
 default_currency: "USD"
 

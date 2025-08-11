@@ -31,10 +31,9 @@ class SessionManager:
         self.default_timeout_minutes = default_timeout_minutes
         self._lock = threading.RLock()  # Thread-safe access
     
-    def create_session(self, ofx_file_path: str, config_file_path: str,
+    def create_session(self, ofx_file_path: str, config_file_path: str, output_file_path: str,
                       training_file_path: Optional[str] = None,
-                      account_file_path: Optional[str] = None,
-                      output_file_path: Optional[str] = None) -> SessionData:
+                      account_file_path: Optional[str] = None) -> SessionData:
         """
         Create a new processing session.
         
@@ -43,7 +42,7 @@ class SessionManager:
             config_file_path: Path to YAML configuration file
             training_file_path: Path to training file (optional)
             account_file_path: Path to accounts file (optional)
-            output_file_path: Path to output file (optional)
+            output_file_path: Path to output file
             
         Returns:
             Created SessionData object

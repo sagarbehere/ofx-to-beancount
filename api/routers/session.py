@@ -95,12 +95,7 @@ async def initialize_session(request: SessionInitRequest):
         output_errors = FileValidator.validate_output_file(request.output_file_path)
         if output_errors:
             error = output_errors[0]
-            if error.error_type == FileErrorType.FILE_NOT_FOUND and not request.output_file_path:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Output file not specified"
-                )
-            elif error.error_type == FileErrorType.PERMISSION_DENIED:
+            if error.error_type == FileErrorType.PERMISSION_DENIED:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Output file not writable: {error.message}"
@@ -116,6 +111,10 @@ async def initialize_session(request: SessionInitRequest):
         # Load configuration
         try:
             config = load_config_file(request.config_file_path)
+            system_messages.append(SystemMessage(
+                level="info",
+                message=f"Configuration loaded successfully from {request.config_file_path}"
+            ))
         except ValueError as e:
             # Config loading already provides detailed error messages
             raise HTTPException(
@@ -126,6 +125,10 @@ async def initialize_session(request: SessionInitRequest):
         # Parse OFX file
         try:
             transactions, account_info, file_stats = parse_ofx_file(request.ofx_file_path)
+            system_messages.append(SystemMessage(
+                level="info",
+                message=f"Successfully parsed OFX file: {file_stats.transaction_count} transactions from {request.ofx_file_path}"
+            ))
         except Exception as e:
             # Check if it's a format error vs other error
             if "not appear to be a valid OFX file" in str(e) or "OFX" in str(e):
@@ -208,6 +211,10 @@ async def initialize_session(request: SessionInitRequest):
                     ))
         else:
             training_available = False
+            system_messages.append(SystemMessage(
+                level="warning",
+                message="Training data file not specified - ML categorization will not be available"
+            ))
         
         # Check accounts file
         accounts_available = True
@@ -253,6 +260,10 @@ async def initialize_session(request: SessionInitRequest):
                     ))
         else:
             accounts_available = False
+            system_messages.append(SystemMessage(
+                level="warning", 
+                message="Accounts file not specified - Account validation and auto-suggestions will not work"
+            ))
         
         # If confirmations are needed, return confirmation required response
         if confirmations_needed:
@@ -270,6 +281,10 @@ async def initialize_session(request: SessionInitRequest):
         session.transactions = transactions
         if accounts_available:
             session.valid_accounts = load_accounts_from_file(request.account_file_path)
+            system_messages.append(SystemMessage(
+                level="info",
+                message=f"Account validation enabled with {len(session.valid_accounts)} accounts from {request.account_file_path}"
+            ))
         else:
             session.valid_accounts = []
         
@@ -284,6 +299,10 @@ async def initialize_session(request: SessionInitRequest):
                 session.training_data_count = len(training_data)
                 training_data_count = len(training_data)
                 classifier_trained = True
+                system_messages.append(SystemMessage(
+                    level="info",
+                    message=f"ML classifier trained on {training_data_count} transactions from {request.training_file_path}"
+                ))
             except Exception as e:
                 system_messages.append(SystemMessage(
                     level="warning",
@@ -366,14 +385,14 @@ async def confirm_degraded_functionality(request: SessionConfirmRequest) -> Sess
                 session.classifier_model = None
                 session.training_data_count = 0
                 system_messages.append(SystemMessage(
-                    level="info", 
+                    level="warning", 
                     message="Continuing without ML categorization. Using default account from config."
                 ))
             elif request.confirmation_type == "accounts_unavailable":
                 # Continue without account validation
                 session.valid_accounts = []
                 system_messages.append(SystemMessage(
-                    level="info",
+                    level="warning",
                     message="Continuing without account validation. Fuzzy completion will be limited."
                 ))
             

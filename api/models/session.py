@@ -22,9 +22,9 @@ class SessionData:
     created_at: datetime
     ofx_file_path: str
     config_file_path: str
+    output_file_path: str
     training_file_path: Optional[str] = None
     account_file_path: Optional[str] = None
-    output_file_path: Optional[str] = None
     
     # Processed data
     transactions: List[Transaction] = field(default_factory=list)
@@ -50,7 +50,7 @@ class SessionInitRequest(BaseModel):
     config_file_path: str = Field(..., description="Path to YAML configuration file")
     training_file_path: Optional[str] = Field(None, description="Path to Beancount training file")
     account_file_path: Optional[str] = Field(None, description="Path to Beancount accounts file")
-    output_file_path: Optional[str] = Field(None, description="Path to output Beancount file")
+    output_file_path: str = Field(..., description="Path to output Beancount file")
 
 
 class OFXStats(BaseModel):
@@ -184,7 +184,7 @@ def create_session_data(init_request: SessionInitRequest) -> SessionData:
         created_at=datetime.now(),
         ofx_file_path=init_request.ofx_file_path,
         config_file_path=init_request.config_file_path,
+        output_file_path=init_request.output_file_path,
         training_file_path=init_request.training_file_path,
-        account_file_path=init_request.account_file_path,
-        output_file_path=init_request.output_file_path
+        account_file_path=init_request.account_file_path
     )

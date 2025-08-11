@@ -91,10 +91,9 @@ def validate_configuration(config_file_path: str, account_file_path: Optional[st
     return errors
 
 
-def validate_session_init_request(ofx_file_path: str, config_file_path: str,
+def validate_session_init_request(ofx_file_path: str, config_file_path: str, output_file_path: str,
                                  training_file_path: Optional[str] = None,
-                                 account_file_path: Optional[str] = None,
-                                 output_file_path: Optional[str] = None) -> List[str]:
+                                 account_file_path: Optional[str] = None) -> List[str]:
     """
     Validate session initialization request data.
     
@@ -103,7 +102,7 @@ def validate_session_init_request(ofx_file_path: str, config_file_path: str,
         config_file_path: Path to YAML configuration file
         training_file_path: Path to training file (optional)
         account_file_path: Path to accounts file (optional)
-        output_file_path: Path to output file (optional)
+        output_file_path: Path to output file
         
     Returns:
         List of validation error messages
@@ -119,12 +118,12 @@ def validate_session_init_request(ofx_file_path: str, config_file_path: str,
     }
     
     # Don't validate output file existence (it may not exist yet)
-    if output_file_path:
-        output_dir = os.path.dirname(output_file_path)
-        if output_dir and not os.path.exists(output_dir):
-            errors.append(f"Output directory does not exist: {output_dir}")
-        elif output_dir and not os.access(output_dir, os.W_OK):
-            errors.append(f"Output directory is not writable: {output_dir}")
+    # Validate output file directory exists
+    output_dir = os.path.dirname(output_file_path)
+    if output_dir and not os.path.exists(output_dir):
+        errors.append(f"Output directory does not exist: {output_dir}")
+    elif output_dir and not os.access(output_dir, os.W_OK):
+        errors.append(f"Output directory is not writable: {output_dir}")
     
     file_errors = validate_file_paths(file_paths)
     errors.extend(file_errors)

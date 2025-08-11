@@ -16,11 +16,84 @@ from typing import Optional, Dict, Any
 import yaml
 import click
 
+from api.models.config import Config, load_config_file
+
 from cli.api_client import APIClient, APIClientError
 from cli.interactive import (
     InteractiveProcessor, prompt_account_confirmation, 
     display_processing_summary, confirm_export
 )
+
+
+def resolve_arguments(cli_args: Dict[str, Any], config: Config) -> Dict[str, Any]:
+    """
+    Resolve arguments with CLI taking precedence over config file.
+    
+    Args:
+        cli_args: Dictionary of CLI arguments (keys match Click parameter names)
+        config: Loaded configuration object
+        
+    Returns:
+        Dictionary of resolved arguments with absolute paths
+        
+    Raises:
+        click.ClickException: For missing required arguments
+    """
+    resolved = {}
+    
+    # Get config sections with defaults
+    files_config = config.files
+    server_config = config.server
+    
+    # File path resolution - CLI takes precedence over config
+    resolved['input_file'] = cli_args.get('input_file')
+    if not resolved['input_file'] and files_config:
+        resolved['input_file'] = files_config.input_file
+    
+    resolved['learning_data'] = cli_args.get('learning_data')
+    if not resolved['learning_data'] and files_config:
+        resolved['learning_data'] = files_config.learning_data_file
+        
+    resolved['output_file'] = cli_args.get('output_file')
+    if not resolved['output_file'] and files_config:
+        resolved['output_file'] = files_config.output_file
+        
+    resolved['account_file'] = cli_args.get('account_file')
+    if not resolved['account_file'] and files_config:
+        resolved['account_file'] = files_config.account_file
+    
+    # Server settings resolution - CLI takes precedence over config
+    resolved['port_num'] = cli_args.get('port_num')
+    if resolved['port_num'] == 8000 and server_config and server_config.port_num:
+        # Only use config port if CLI used default value
+        resolved['port_num'] = server_config.port_num
+    
+    resolved['server_only'] = cli_args.get('server_only', False)
+    if not resolved['server_only'] and server_config and server_config.server_only:
+        resolved['server_only'] = server_config.server_only
+    
+    # Config file always comes from CLI (required)
+    resolved['config_file'] = cli_args.get('config_file')
+    
+    # Validate required arguments after resolution
+    if not resolved['input_file']:
+        raise click.ClickException(
+            "Input file is required. Provide via -i/--input-file or config file 'files.input_file'"
+        )
+    
+    if not resolved['output_file']:
+        raise click.ClickException(
+            "Output file is required. Provide via -o/--output-file or config file 'files.output_file'"
+        )
+    
+    # Convert all file paths to absolute paths to avoid issues with server working directory
+    file_path_keys = ['input_file', 'learning_data', 'output_file', 'account_file', 'config_file']
+    for key in file_path_keys:
+        if resolved.get(key):
+            resolved[key] = os.path.abspath(resolved[key])
+    
+    return resolved
+
 
 
 def display_system_messages(messages: list) -> None:
@@ -173,10 +246,9 @@ class OFXConverter:
         self.api_client: Optional[APIClient] = None
         self.session_id: Optional[str] = None
     
-    def run_interactive_mode(self, input_file: str, config_file: str,
+    def run_interactive_mode(self, input_file: str, config_file: str, output_file: str,
                            learning_data: Optional[str] = None,
                            account_file: Optional[str] = None,
-                           output_file: Optional[str] = None,
                            port: int = 8000) -> int:
         """
         Run the interactive CLI workflow.
@@ -195,7 +267,7 @@ class OFXConverter:
             
             # Initialize session
             session_data = self._initialize_session(
-                input_file, config_file, learning_data, account_file, output_file
+                input_file, config_file, output_file, learning_data, account_file
             )
             if not session_data:
                 return 1
@@ -228,7 +300,7 @@ class OFXConverter:
             self._display_session_summary()
             
             # Export results
-            if output_file and self._confirm_export():
+            if self._confirm_export():
                 click.echo()  # Empty line before export
                 self._export_results(output_file)
             
@@ -279,9 +351,8 @@ class OFXConverter:
             if self.server_manager:
                 self.server_manager.stop_server()
     
-    def _initialize_session(self, input_file: str, config_file: str,
-                          learning_data: Optional[str], account_file: Optional[str],
-                          output_file: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _initialize_session(self, input_file: str, config_file: str, output_file: str,
+                          learning_data: Optional[str], account_file: Optional[str]) -> Optional[Dict[str, Any]]:
         """Initialize processing session with confirmation workflow."""
         try:
             click.echo("🔄 Initializing session...")
@@ -309,11 +380,6 @@ class OFXConverter:
                 pass
             
             click.echo("✅ Session initialized successfully")
-            
-            if response.get('classifier_trained'):
-                click.echo(f"🤖 ML classifier trained on {response.get('training_data_count', 0)} transactions")
-            else:
-                click.echo("⚠️ ML classifier not trained - manual categorization required")
             
             return response
             
@@ -450,21 +516,21 @@ class OFXConverter:
 
 
 @click.command()
-@click.option('-i', '--input-file', required=True, type=click.Path(exists=True),
-              help='OFX file to process')
-@click.option('-l', '--learning-data', type=click.Path(exists=True),
+@click.option('-i', '--input-file', type=click.Path(),
+              help='OFX file to process (required if not in config)')
+@click.option('-l', '--learning-data', type=click.Path(),
               help='Beancount file for training data')
 @click.option('-o', '--output-file', type=click.Path(),
-              help='Output Beancount file (appends if exists)')
-@click.option('-a', '--account-file', type=click.Path(exists=True),
+              help='Output Beancount file (appends if exists) [required if not in config]')
+@click.option('-a', '--account-file', type=click.Path(),
               help='Full Beancount file with open directives for account validation')
-@click.option('-c', '--config-file', required=True, type=click.Path(exists=True),
+@click.option('-c', '--config-file', required=True, type=click.Path(),
               help='YAML configuration file')
 @click.option('-p', '--port-num', default=8000, type=int,
-              help='Port number for API server (default: 8000)')
+              help='Port number for API server (default: 8000, can be in config)')
 @click.option('-s', '--server-only', is_flag=True,
-              help='Run only the API server (for GUI client use)')
-def main(input_file: str, learning_data: Optional[str], output_file: Optional[str],
+              help='Run only the API server (for GUI client use, can be in config)')
+def main(input_file: Optional[str], learning_data: Optional[str], output_file: Optional[str],
          account_file: Optional[str], config_file: str, port_num: int, server_only: bool) -> None:
     """
     OFX to Beancount Converter
@@ -472,19 +538,54 @@ def main(input_file: str, learning_data: Optional[str], output_file: Optional[st
     Convert OFX files to Beancount format with intelligent ML-based categorization.
     """
     
+    # Load and validate configuration
+    try:
+        config = load_config_file(config_file)
+    except ValueError as e:
+        click.echo(f"❌ Error loading config file: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Unexpected error loading config: {e}", err=True)
+        sys.exit(1)
+    
+    # Resolve arguments using CLI + config precedence
+    try:
+        cli_args = {
+            'input_file': input_file,
+            'learning_data': learning_data,
+            'output_file': output_file,
+            'account_file': account_file,
+            'config_file': config_file,
+            'port_num': port_num,
+            'server_only': server_only
+        }
+        resolved_args = resolve_arguments(cli_args, config)
+    except click.ClickException as e:
+        click.echo(f"❌ {e.message}", err=True)
+        sys.exit(1)
+    
     converter = OFXConverter()
     
-    if server_only:
+    # Use resolved arguments from this point forward
+    resolved_input_file = resolved_args['input_file']
+    resolved_learning_data = resolved_args['learning_data']
+    resolved_output_file = resolved_args['output_file']
+    resolved_account_file = resolved_args['account_file']
+    resolved_config_file = resolved_args['config_file']
+    resolved_port_num = resolved_args['port_num']
+    resolved_server_only = resolved_args['server_only']
+    
+    if resolved_server_only:
         # Validate required files even in server-only mode
         required_files = {
-            'OFX file': input_file,
-            'config file': config_file
+            'OFX file': resolved_input_file,
+            'config file': resolved_config_file
         }
         
-        if learning_data:
-            required_files['learning data'] = learning_data
-        if account_file:
-            required_files['account file'] = account_file
+        if resolved_learning_data:
+            required_files['learning data'] = resolved_learning_data
+        if resolved_account_file:
+            required_files['account file'] = resolved_account_file
         
         # Check file accessibility
         for name, path in required_files.items():
@@ -493,11 +594,11 @@ def main(input_file: str, learning_data: Optional[str], output_file: Optional[st
                 sys.exit(1)
         
         click.echo("✅ All required files validated")
-        exit_code = converter.run_server_only_mode(port_num)
+        exit_code = converter.run_server_only_mode(resolved_port_num)
     else:
         exit_code = converter.run_interactive_mode(
-            input_file, config_file, learning_data, 
-            account_file, output_file, port_num
+            resolved_input_file, resolved_config_file, resolved_output_file,
+            resolved_learning_data, resolved_account_file, resolved_port_num
         )
     
     sys.exit(exit_code)

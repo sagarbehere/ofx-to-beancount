@@ -29,7 +29,7 @@ This project creates an application that reads financial transactions from OFX (
 - Compare incoming transactions with existing output file transactions
 - Identify potential duplicates using date, payee, amount, and account
 - **Detection Timing**: Perform duplicate detection during `/transactions/categorize` API call
-- **Requirements**: Only runs if output file path is provided during session initialization and file exists
+- **Requirements**: Always runs since output file is now required
 - **Graceful Degradation**: If output file doesn't exist or duplicate detection fails, silently continue without duplicate detection and notify user via system messages
 - **Detection Criteria**: Two transactions are considered duplicates if they match:
   - Date (exact match)
@@ -109,7 +109,7 @@ Core business logic exposed via REST API for local use, optimized for minimal da
 ##### `POST /transactions/categorize`
 **Purpose**: Get all transactions with ML categorization and duplicate detection in one call
 
-**Duplicate Detection**: Runs automatically if output file path was provided during session initialization and file exists. If output file doesn't exist or duplicate detection fails, continues without duplicate detection and includes appropriate system message.
+**Duplicate Detection**: Runs automatically since output file is now required. If duplicate detection fails, continues without duplicate detection and includes appropriate system message.
 **Input**:
 ```json
 {
@@ -294,14 +294,29 @@ class Posting:
 
 ### Configuration File Format
 - **YAML format** for all configuration files
-- **Required configuration**: System must stop and notify user if configuration files are missing
+- **Required configuration file**: System must stop and notify user if configuration file is missing (specified via `-c`)
+- **Optional file path specification**: File paths can be specified in config file and overridden by CLI arguments
 - **Configuration Location**: No default location - must be specified via `-c` command-line option
 - **Single Configuration**: Only one configuration file format supported
 - **Account validation**: System must validate that configured account mappings reference accounts that exist in the provided Beancount accounts file. If validation fails, the program must warn the user and stop execution (not proceed)
 - **Interactive override**: Users can adjust account names interactively during processing
+- **Backward compatibility**: Existing config files without new optional sections continue to work unchanged
 
 ### Sample Configuration Structure
 ```yaml
+# Optional file paths - can be overridden by command line arguments
+files:
+  input_file: "/path/to/input.ofx"
+  learning_data_file: "/path/to/training.beancount"
+  output_file: "/path/to/output.beancount"
+  account_file: "/path/to/accounts.beancount"
+
+# Optional server settings - can be overridden by command line arguments
+server:
+  port_num: 8000
+  server_only: false
+
+# Required account mappings
 accounts:
   mappings:
     - institution: "AMEX"
@@ -309,9 +324,26 @@ accounts:
       account_id: "9OIB5AB8SY32XLB|12007"
       beancount_account: "Liabilities:Amex:BlueCashPreferred"
       currency: "USD"
+
+# Required defaults
 default_currency: "USD"
 default_account_when_training_unavailable: "Expenses:Unknown"
 ```
+
+### Configuration Field Precedence
+
+The system follows this precedence order for configuration values:
+
+1. **Command Line Arguments** (highest precedence) - Override all other sources
+2. **Configuration File Values** (medium precedence) - Used when CLI arguments not provided
+3. **Application Defaults** (lowest precedence) - Used when neither CLI nor config specify values
+4. **Error for Required Fields** - If required arguments missing from both CLI and config, system exits with error
+
+### File Path Resolution
+
+- **Relative paths**: Resolved relative to current working directory (same behavior as CLI arguments)
+- **Absolute paths**: Used as-is
+- **Path validation**: All resolved file paths validated using existing FileValidator after argument resolution
 
 ## Machine Learning Details
 
@@ -399,15 +431,27 @@ default_account_when_training_unavailable: "Expenses:Unknown"
 python ofx_converter.py [OPTIONS]
 
 Options:
-  -i, --input-file PATH          OFX file to process [required]
-  -l, --learning-data PATH       Beancount file for training data
-  -o, --output-file PATH         Output Beancount file (appends if exists) - enables duplicate detection if file exists
-  -a, --account-file PATH        Full Beancount file with open directives for account validation
+  -i, --input-file PATH          OFX file to process [required if not in config]
+  -l, --learning-data-file PATH  Beancount file for training data [optional, can be in config]
+  -o, --output-file PATH         Output Beancount file (appends if exists) [required, can be in config] - enables duplicate detection
+  -a, --account-file PATH        Full Beancount file with open directives for account validation [optional, can be in config]
   -c, --config-file PATH         YAML configuration file [required]
-  -p, --port-num INTEGER         Port number for API server (default: 8000)
-  -s, --server-only              Run only the API server (for GUI client use)
+  -p, --port-num INTEGER         Port number for API server (default: 8000, can be in config)
+  -s, --server-only              Run only the API server (for GUI client use) [can be in config]
   --help                         Show this message and exit
 ```
+
+### Argument Resolution
+
+All command line arguments (except `-c`) can now be specified in the configuration file. The system resolves arguments using this precedence:
+
+1. **CLI Arguments** - Highest precedence, always override config file values
+2. **Config File Values** - Used when CLI arguments not provided  
+3. **Required Validation** - If neither CLI nor config provides required arguments (like input file), system exits with clear error message
+
+**Example Error Messages:**
+- `❌ Input file is required. Provide via -i/--input-file or config file 'files.input_file'`
+- `❌ Config file is required and must be specified via -c/--config-file`
 
 ## User Workflow
 

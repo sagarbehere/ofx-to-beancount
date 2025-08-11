@@ -22,12 +22,32 @@ class AccountMapping:
     currency: str
 
 
+@dataclass  
+class FilePathsConfig:
+    """Optional file paths configuration."""
+    input_file: Optional[str] = None
+    learning_data_file: Optional[str] = None
+    output_file: Optional[str] = None
+    account_file: Optional[str] = None
+
+
+@dataclass
+class ServerConfig:
+    """Optional server configuration."""
+    port_num: Optional[int] = None
+    server_only: Optional[bool] = None
+
+
 @dataclass
 class Config:
     """Main configuration data structure."""
     accounts: List[AccountMapping]
     default_currency: str
     default_account_when_training_unavailable: str
+    
+    # New optional fields
+    files: Optional[FilePathsConfig] = None
+    server: Optional[ServerConfig] = None
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Config':
@@ -46,10 +66,32 @@ class Config:
                     currency=mapping_data.get('currency', data.get('default_currency', 'USD'))
                 ))
         
+        # Parse optional files section
+        files_config = None
+        if 'files' in data:
+            files_data = data['files']
+            files_config = FilePathsConfig(
+                input_file=files_data.get('input_file'),
+                learning_data_file=files_data.get('learning_data_file'),
+                output_file=files_data.get('output_file'),
+                account_file=files_data.get('account_file')
+            )
+        
+        # Parse optional server section
+        server_config = None
+        if 'server' in data:
+            server_data = data['server']
+            server_config = ServerConfig(
+                port_num=server_data.get('port_num'),
+                server_only=server_data.get('server_only')
+            )
+        
         return cls(
             accounts=mappings,
             default_currency=data.get('default_currency', 'USD'),
-            default_account_when_training_unavailable=data.get('default_account_when_training_unavailable', 'Expenses:Unknown')
+            default_account_when_training_unavailable=data.get('default_account_when_training_unavailable', 'Expenses:Unknown'),
+            files=files_config,
+            server=server_config
         )
 
 
@@ -151,6 +193,21 @@ def validate_config(config: Config, valid_accounts: List[str]) -> List[str]:
 def create_example_config() -> Dict[str, Any]:
     """Create an example configuration structure."""
     return {
+        # Optional file paths - can be overridden by command line arguments
+        'files': {
+            'input_file': '/path/to/input.ofx',
+            'learning_data_file': '/path/to/training.beancount',
+            'output_file': '/path/to/output.beancount',
+            'account_file': '/path/to/accounts.beancount'
+        },
+        
+        # Optional server settings
+        'server': {
+            'port_num': 8000,
+            'server_only': False
+        },
+        
+        # Required account mappings
         'accounts': {
             'mappings': [
                 {
@@ -169,6 +226,8 @@ def create_example_config() -> Dict[str, Any]:
                 }
             ]
         },
+        
+        # Required defaults
         'default_currency': 'USD',
         'default_account_when_training_unavailable': 'Expenses:Unknown'
     }

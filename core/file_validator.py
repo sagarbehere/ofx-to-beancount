@@ -102,18 +102,10 @@ class FileValidator:
         return FileValidator.validate_input_file(file_path)
     
     @staticmethod
-    def validate_output_file(file_path: Optional[str]) -> List[FileValidationError]:
-        """Validate output file - must be writable if specified."""
+    def validate_output_file(file_path: str) -> List[FileValidationError]:
+        """Validate output file - must be writable."""
         errors = []
         
-        if not file_path:
-            errors.append(FileValidationError(
-                FileErrorType.FILE_NOT_FOUND,
-                "",
-                "Output file path not specified"
-            ))
-            return errors
-            
         # If file exists, check if writable
         if os.path.exists(file_path):
             if not os.path.isfile(file_path):

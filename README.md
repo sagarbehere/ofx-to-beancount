@@ -23,6 +23,8 @@ DISCLAIMER: Has _ONLY_ been tested on a couple of financial institutions that I 
 
 ### Install Dependencies
 
+It's recommended to do the installation in a Python virtual environment.
+
 ```bash
 git clone git@github.com:sagarbehere/ofx-to-beancount.git
 cd ofx-to-beancount
@@ -84,11 +86,24 @@ Type "help", "copyright", "credits" or "license" for more information.
 >>> 
 ```
 
-This will then correspond to the following content in your config file
+This will then correspond to the following account mappings in your config file
 
 ```yaml
 # config.yaml
 
+# Optional file paths - can be overridden by command line arguments
+files:
+  input_file: "/path/to/your/statement.ofx"
+  learning_data_file: "/path/to/your/training.beancount"
+  output_file: "/path/to/your/output.beancount"
+  account_file: "/path/to/your/accounts.beancount"
+
+# Optional server settings - can be overridden by command line arguments
+server:
+  port_num: 8000
+  server_only: false
+
+# Required account mappings
 accounts:
   mappings:
     # American Express Blue Cash Preferred card
@@ -105,7 +120,7 @@ accounts:
       beancount_account: "Assets:BofA:Checking"
       currency: "USD"
  
- # Default currency for transactions without explicit currency
+# Default currency for transactions without explicit currency
 default_currency: "USD"
 
 # Default account to use when training data is unavailable for ML categorization
@@ -148,15 +163,17 @@ python ofx_converter.py \
 python ofx_converter.py [OPTIONS]
 
 Options:
-  -i, --input-file PATH     OFX file to process [required]
-  -l, --learning-data PATH  Beancount file for training data
-  -o, --output-file PATH    Output Beancount file (appends if exists)
-  -a, --account-file PATH   Full Beancount file with open directives
-  -c, --config-file PATH    YAML configuration file [required]
-  -p, --port-num INTEGER    Port number for API server (default: 8000)
-  -s, --server-only         Run only the API server (for GUI client use)
-  --help                    Show this message and exit
+  -i, --input-file PATH        OFX file to process [required if not in config]
+  -l, --learning-data-file PATH Beancount file for training data [optional, can be in config]
+  -o, --output-file PATH       Output Beancount file (appends if exists) [required, can be in config]
+  -a, --account-file PATH      Full Beancount file with open directives [optional, can be in config]
+  -c, --config-file PATH       YAML configuration file [required]
+  -p, --port-num INTEGER       Port number for API server (default: 8000, can be in config)
+  -s, --server-only            Run only the API server (for GUI client use) [can be in config]
+  --help                       Show this message and exit
 ```
+
+**Note:** All arguments except `-c/--config-file` can be specified in the configuration file. Command line arguments always take precedence over config file values.
 
 ### Training the ML Classifier
 

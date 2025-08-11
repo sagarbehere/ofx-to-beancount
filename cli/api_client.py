@@ -93,10 +93,9 @@ class APIClient:
         
         return False
     
-    def initialize_session(self, ofx_file_path: str, config_file_path: str,
+    def initialize_session(self, ofx_file_path: str, config_file_path: str, output_file_path: str,
                           training_file_path: Optional[str] = None,
-                          account_file_path: Optional[str] = None,
-                          output_file_path: Optional[str] = None) -> Dict[str, Any]:
+                          account_file_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Initialize a new processing session.
         
@@ -105,7 +104,7 @@ class APIClient:
             config_file_path: Path to YAML configuration file
             training_file_path: Path to training file (optional)
             account_file_path: Path to accounts file (optional)  
-            output_file_path: Path to output file (optional)
+            output_file_path: Path to output file
             
         Returns:
             Session initialization response
@@ -119,8 +118,7 @@ class APIClient:
             request_data["training_file_path"] = training_file_path
         if account_file_path:
             request_data["account_file_path"] = account_file_path
-        if output_file_path:
-            request_data["output_file_path"] = output_file_path
+        request_data["output_file_path"] = output_file_path
         
         return self._make_request("POST", "/session/initialize", json=request_data)
     

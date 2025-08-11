@@ -96,39 +96,34 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
         duplicate_count = 0
         system_messages = []
         
-        if session.output_file_path:
-            try:
-                duplicates = detect_duplicates(session.transactions, session.output_file_path)
+        # Always run duplicate detection since output file is now required
+        try:
+            duplicates = detect_duplicates(session.transactions, session.output_file_path)
+            
+            # Create mapping from new transaction to duplicate details
+            duplicate_map = {}
+            
+            for dup in duplicates:
+                # Find the API transaction that matches this duplicate's new transaction
+                target_txn_id = f"tx_{hash(f'{dup.new_transaction_date}_{dup.new_transaction_payee}_{dup.new_transaction_amount}')}"
                 
-                # Create mapping from new transaction to duplicate details
-                duplicate_map = {}
-                
-                for dup in duplicates:
-                    # Find the API transaction that matches this duplicate's new transaction
-                    target_txn_id = f"tx_{hash(f'{dup.new_transaction_date}_{dup.new_transaction_payee}_{dup.new_transaction_amount}')}"
-                    
-                    for api_txn in categorized_transactions:
-                        if api_txn.id == target_txn_id:
-                            duplicate_map[api_txn.id] = dup
-                            break
-                
-                # Apply duplicate information
                 for api_txn in categorized_transactions:
-                    if api_txn.id in duplicate_map:
-                        api_txn.is_potential_duplicate = True
-                        api_txn.duplicate_details = duplicate_map[api_txn.id]
-                        duplicate_count += 1
-                        
-            except Exception as e:
-                print(f"Duplicate detection failed: {e}")
-                system_messages.append(SystemMessage(
-                    level="warning",
-                    message=f"Duplicate detection unavailable: {str(e)}"
-                ))
-        else:
+                    if api_txn.id == target_txn_id:
+                        duplicate_map[api_txn.id] = dup
+                        break
+            
+            # Apply duplicate information
+            for api_txn in categorized_transactions:
+                if api_txn.id in duplicate_map:
+                    api_txn.is_potential_duplicate = True
+                    api_txn.duplicate_details = duplicate_map[api_txn.id]
+                    duplicate_count += 1
+                    
+        except Exception as e:
+            print(f"Duplicate detection failed: {e}")
             system_messages.append(SystemMessage(
-                level="info",
-                message="Note: Duplicate detection unavailable - no output file specified"
+                level="warning",
+                message=f"Duplicate detection unavailable: {str(e)}"
             ))
         
         # Update session state
