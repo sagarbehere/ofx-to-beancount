@@ -123,7 +123,7 @@ Core business logic exposed via REST API for local use, optimized for minimal da
 {
   "transactions": [
     {
-      "id": "tx_001",
+      "id": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890",
       "date": "2024-01-15", 
       "payee": "GROCERY STORE",
       "memo": "FOOD PURCHASE",
@@ -133,7 +133,7 @@ Core business logic exposed via REST API for local use, optimized for minimal da
       "confidence": 0.85,
       "is_potential_duplicate": false,
       "duplicate_details": {
-        "existing_transaction_id": "existing_123",
+        "existing_transaction_id": "z9y8x7w6v5u4t3s2r1q0p9o8n7m6l5k4j3h2g1f0e9d8c7b6a5948372615049382",
         "similarity_score": 0.95,
         "match_criteria": ["date", "amount", "account", "payee"],
         "existing_transaction_date": "2024-01-15",
@@ -162,19 +162,19 @@ Core business logic exposed via REST API for local use, optimized for minimal da
   "session_id": "uuid-string",
   "updates": [
     {
-      "transaction_id": "tx_001",
+      "transaction_id": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890",
       "confirmed_category": "Expenses:Food:Groceries", 
       "narration": "Weekly grocery shopping",
       "splits": null
     },
     {
-      "transaction_id": "tx_002",
+      "transaction_id": "b2c3d4e5f6789012345678901234567890123456789012345678901234567890ab",
       "confirmed_category": null,
       "action": "skip",
       "reason": "duplicate"
     },
     {
-      "transaction_id": "tx_003",
+      "transaction_id": "c3d4e5f6789012345678901234567890123456789012345678901234567890abc1",
       "confirmed_category": "Expenses:Entertainment",
       "narration": "Movie tickets",
       "splits": [
@@ -201,7 +201,7 @@ Core business logic exposed via REST API for local use, optimized for minimal da
   "split_count": 3,
   "validation_errors": [
     {
-      "transaction_id": "tx_005",
+      "transaction_id": "d4e5f6789012345678901234567890123456789012345678901234567890abc12",
       "error": "Postings do not balance",
       "details": "Sum: 0.01 USD"
     }
@@ -240,7 +240,7 @@ Core business logic exposed via REST API for local use, optimized for minimal da
     },
     "date_range": {"start": "2024-01-01", "end": "2024-03-31"}
   },
-  "beancount_preview": "2024-01-15 * \"GROCERY STORE\" \"Weekly grocery shopping\"\n  Expenses:Food:Groceries           85.50 USD\n  Liabilities:Chase:SapphireReserve -85.50 USD\n\n...",
+  "beancount_preview": "2024-01-15 * \"GROCERY STORE\" \"Weekly grocery shopping\"\n  transaction_id: \"a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890\"\n  ofx_id: \"20240115001234567890\"\n  Expenses:Food:Groceries           85.50 USD\n  Liabilities:Chase:SapphireReserve -85.50 USD\n\n...",
   "system_messages": [
     {
       "level": "info",
@@ -389,9 +389,15 @@ The system follows this precedence order for configuration values:
 
 ### Transaction Format
 - **Date format**: Standard Beancount format (YYYY-MM-DD)
-- **Transaction IDs**: Include unique identifier in narration field (e.g., "Weekly grocery shopping [ID: tx_001]")
+- **Transaction IDs**: Include unique identifier as metadata field `transaction_id` using SHA256 hash of immutable fields
+- **ID Generation**: SHA256 hash of concatenated string: `date|payee|amount|mapped_beancount_account`
+- **ID Collision Handling**: Append `-2`, `-3`, etc. for hash collisions within the same OFX file
+- **Duplicate Transaction IDs**: For potential duplicates that users choose to keep, append `-dup-1`, `-dup-2`, etc.
+- **ID Fallback**: If mapped account unavailable, use raw OFX account + short random string
+- **OFX Source IDs**: Include original OFX transaction ID as metadata field `ofx_id` when available and valid
+- **OFX ID Handling**: Omit `ofx_id` metadata if OFX file lacks transaction ID or ID is malformed/empty
 - **Directives**: Focus only on transaction directives (ignore open/close/balance statements)
-- **Metadata**: No additional metadata or links generated
+- **Metadata**: Both transaction_id and ofx_id metadata automatically generated for all transactions
 
 ### Currency Handling
 - **Multi-currency transactions**: Flag with exclamation mark in Beancount format
