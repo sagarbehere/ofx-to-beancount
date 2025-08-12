@@ -196,4 +196,4 @@ The API will be available at (assuming default port number 8000, adjust accordin
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the GPLv2 License.
