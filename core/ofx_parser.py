@@ -131,6 +131,8 @@ def extract_transactions(ofx_account) -> List[Transaction]:
             account="",  # Will be set from account mapping
             categorized_accounts=[],  # Will be populated during categorization
             narration="",  # User will add during review
+            transaction_id="",  # Will be generated during categorization
+            ofx_id=None,  # Will be validated during categorization
             is_split=False,
             original_ofx_id=getattr(ofx_transaction, 'id', transaction_id)
         )

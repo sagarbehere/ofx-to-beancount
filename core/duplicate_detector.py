@@ -11,8 +11,38 @@ from decimal import Decimal
 from rapidfuzz import fuzz
 from beancount import loader
 from beancount.core import data
+import re
 
 from api.models.transaction import Transaction, DuplicateMatch
+
+
+def extract_metadata_from_transaction(transaction_entry) -> dict:
+    """
+    Extract transaction_id and ofx_id metadata from Beancount transaction entry.
+    
+    NOTE: This metadata is extracted for reference purposes only.
+    It is NOT used for duplicate detection logic.
+    Duplicate detection continues to use date/payee/amount/account only.
+    
+    Args:
+        transaction_entry: Beancount transaction entry object
+        
+    Returns:
+        Dictionary with extracted metadata (transaction_id, ofx_id)
+    """
+    metadata = {}
+    
+    # Check if transaction has meta attribute
+    if hasattr(transaction_entry, 'meta') and transaction_entry.meta:
+        # Extract transaction_id (for reference only, not duplicate detection)
+        if 'transaction_id' in transaction_entry.meta:
+            metadata['transaction_id'] = transaction_entry.meta['transaction_id']
+        
+        # Extract ofx_id (for reference only, not duplicate detection)  
+        if 'ofx_id' in transaction_entry.meta:
+            metadata['ofx_id'] = transaction_entry.meta['ofx_id']
+    
+    return metadata
 
 
 class DuplicateDetectionError(Exception):
@@ -96,7 +126,7 @@ def _check_duplicate_match(new_txn: Transaction, existing_txn: Transaction) -> D
         
         # All criteria met - this is a potential duplicate
         return DuplicateMatch(
-            existing_transaction_id=existing_txn.original_ofx_id,
+            existing_transaction_id=existing_txn.transaction_id,
             similarity_score=payee_similarity,
             match_criteria=match_criteria,
             existing_transaction_date=existing_txn.date,
@@ -189,6 +219,9 @@ def load_existing_transactions(file_path: str) -> List[Transaction]:
                 if not source_account:
                     continue
                 
+                # Extract metadata for reference purposes only (NOT used for duplicate detection)
+                metadata = extract_metadata_from_transaction(entry)
+                
                 # Create transaction for duplicate detection
                 transaction = Transaction(
                     date=txn_date,
@@ -200,7 +233,9 @@ def load_existing_transactions(file_path: str) -> List[Transaction]:
                     categorized_accounts=[],
                     narration=narration,
                     is_split=len(entry.postings) > 2,
-                    original_ofx_id=f"existing_{hash(f'{txn_date}_{payee}_{transaction_amount}')}"
+                    transaction_id=metadata.get('transaction_id', f"existing_{hash(f'{txn_date}_{payee}_{transaction_amount}')}"),
+                    ofx_id=metadata.get('ofx_id'),
+                    original_ofx_id=metadata.get('ofx_id', f"existing_{hash(f'{txn_date}_{payee}_{transaction_amount}')}")  # Keep for backwards compatibility
                 )
                 
                 transactions.append(transaction)

@@ -78,15 +78,22 @@ def generate_beancount_transaction(transaction: Transaction) -> str:
         combined_payee = _combine_payee_and_memo(transaction.payee, transaction.memo)
         header = f'{transaction.date} {flag} "{combined_payee}"'
         
-        # Use narration field only for user-entered notes, not transaction metadata
+        # Use narration field only for user-entered notes (clean, no ID embedding)
         if transaction.narration and transaction.narration.strip():
-            # User provided a custom note - use it
-            header += f' "{transaction.narration} [ID: {transaction.original_ofx_id}]"'
+            # User provided a custom note - use it clean
+            header += f' "{transaction.narration}"'
         else:
-            # No user note - just include transaction ID
-            header += f' "[ID: {transaction.original_ofx_id}]"'
+            # No user note - use empty narration
+            header += ' ""'
         
         lines.append(header)
+        
+        # Add dual metadata (transaction_id always, ofx_id conditionally)
+        lines.append(f'  transaction_id: "{transaction.transaction_id}"')
+        
+        # Add ofx_id metadata only if available and valid
+        if transaction.ofx_id:
+            lines.append(f'  ofx_id: "{transaction.ofx_id}"')
         
         # Add postings
         if transaction.is_split and transaction.categorized_accounts:
@@ -376,7 +383,7 @@ def preview_beancount_output(transactions: List[Transaction], max_transactions: 
         max_transactions: Maximum number of transactions to include
         
     Returns:
-        Preview string of formatted Beancount content
+        Preview string of formatted Beancount content with dual metadata
     """
     if not transactions:
         return ""

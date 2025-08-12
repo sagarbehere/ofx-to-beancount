@@ -70,7 +70,7 @@ async def export_beancount(request: ExportBeancountRequest):
             transaction_errors = validate_transaction(transaction)
             if transaction_errors:
                 validation_errors.extend([
-                    f"Transaction {transaction.original_ofx_id}: {error}"
+                    f"Transaction {transaction.transaction_id}: {error}"
                     for error in transaction_errors
                 ])
                 continue  # Skip invalid transactions
@@ -241,7 +241,7 @@ async def validate_export_readiness(session_id: str):
             if transaction_errors:
                 validation_results["invalid_transactions"] += 1
                 validation_results["validation_errors"].extend([
-                    f"Transaction {transaction.original_ofx_id}: {error}"
+                    f"Transaction {transaction.transaction_id}: {error}"
                     for error in transaction_errors
                 ])
                 continue

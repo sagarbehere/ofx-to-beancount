@@ -35,8 +35,11 @@ class Transaction:
     currency: str
     account: str  # Source account (from OFX)
     categorized_accounts: List[Posting]  # Target accounts
-    narration: str  # User-entered note
+    narration: str  # User-entered note (clean, without ID)
+    transaction_id: str  # SHA256 hash of immutable fields
+    ofx_id: Optional[str]  # Original OFX transaction ID (when available)
     is_split: bool
+    # DEPRECATED: Use ofx_id instead
     original_ofx_id: str
     
     def __post_init__(self):
@@ -70,7 +73,9 @@ class TransactionAPI(BaseModel):
     confidence: Optional[float] = Field(None, description="ML confidence score (0.0-1.0)")
     is_potential_duplicate: bool = Field(False, description="Whether transaction might be a duplicate")
     duplicate_details: Optional['DuplicateMatch'] = Field(None, description="Details about potential duplicate match")
-    narration: Optional[str] = Field("", description="User-entered narration")
+    narration: Optional[str] = Field("", description="User-entered narration (clean, without ID)")
+    transaction_id: str = Field(..., description="SHA256 hash of immutable fields")
+    ofx_id: Optional[str] = Field(None, description="Original OFX transaction ID (when available)")
     splits: Optional[List[PostingAPI]] = Field(None, description="Split postings if transaction is split")
     
     @validator('date')
@@ -99,7 +104,8 @@ class TransactionUpdateAPI(BaseModel):
     """API model for transaction updates from user interaction."""
     transaction_id: str = Field(..., description="Transaction ID to update")
     confirmed_category: Optional[str] = Field(None, description="User-confirmed account category")
-    narration: Optional[str] = Field("", description="User-entered narration")
+    narration: Optional[str] = Field("", description="User-entered narration (clean, without ID)")
+    ofx_id: Optional[str] = Field(None, description="Preserve original OFX ID (read-only)")
     splits: Optional[List[PostingAPI]] = Field(None, description="Split postings for multi-category transactions")
     action: Optional[str] = Field(None, description="Special action: 'skip' for duplicates")
     reason: Optional[str] = Field(None, description="Reason for action (e.g., 'duplicate')")

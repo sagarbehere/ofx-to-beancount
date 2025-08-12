@@ -260,6 +260,8 @@ def extract_training_data_from_beancount(file_path: str, target_account: Optiona
                     account='',  # Not used for training
                     categorized_accounts=[],  # Will be populated below
                     narration='',
+                    transaction_id="",  # Not used for training
+                    ofx_id=None,  # Not used for training
                     is_split=len(postings) > 2,
                     original_ofx_id=f"training_{hash(f'{txn_date}_{payee}_{narration}')}"
                 )

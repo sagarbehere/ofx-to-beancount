@@ -22,6 +22,7 @@ from api.services.validator import validate_transaction_updates
 from core.classifier import categorize_transaction, get_confidence_threshold
 from core.duplicate_detector import detect_duplicates
 from core.beancount_generator import validate_transaction
+from core.transaction_id_generator import TransactionIdGenerator
 
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -51,15 +52,29 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
             transaction.account = request.confirmed_account
             transaction.currency = request.confirmed_currency
         
+        # Initialize transaction ID generator for this session
+        id_generator = TransactionIdGenerator()
+        
+        # Generate transaction IDs and validate OFX IDs for all transactions
+        for transaction in session.transactions:
+            # Generate SHA256-based transaction ID using mapped account
+            transaction.transaction_id = id_generator.generate_id(
+                date=transaction.date,
+                payee=transaction.payee,
+                amount=str(transaction.amount),
+                mapped_account=request.confirmed_account,  # Use confirmed account for ID generation
+                is_kept_duplicate=False  # Will handle kept duplicates later if needed
+            )
+            
+            # Validate and set OFX ID from original_ofx_id
+            transaction.ofx_id = id_generator.validate_ofx_id(transaction.original_ofx_id)
+        
         # Perform ML categorization if classifier is available
         categorized_transactions = []
         high_confidence_count = 0
         confidence_threshold = get_confidence_threshold()
         
         for transaction in session.transactions:
-            # Create unique transaction ID
-            transaction_id = f"tx_{hash(f'{transaction.date}_{transaction.payee}_{transaction.amount}')}"
-            
             # Initialize with unknown category
             suggested_category = "Expenses:Unknown"
             confidence = 0.0
@@ -75,11 +90,11 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
                     if confidence >= confidence_threshold:
                         high_confidence_count += 1
                 except Exception as e:
-                    print(f"Categorization failed for transaction {transaction_id}: {e}")
+                    print(f"Categorization failed for transaction {transaction.transaction_id}: {e}")
             
-            # Create API transaction object
+            # Create API transaction object with dual metadata
             api_transaction = TransactionAPI(
-                id=transaction_id,
+                id=transaction.transaction_id,
                 date=transaction.date,
                 payee=transaction.payee,
                 memo=transaction.memo,
@@ -87,7 +102,9 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
                 currency=transaction.currency,
                 suggested_category=suggested_category,
                 confidence=confidence,
-                is_potential_duplicate=False  # Will be updated below
+                is_potential_duplicate=False,  # Will be updated below
+                transaction_id=transaction.transaction_id,
+                ofx_id=transaction.ofx_id
             )
             
             categorized_transactions.append(api_transaction)
@@ -105,10 +122,11 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
             
             for dup in duplicates:
                 # Find the API transaction that matches this duplicate's new transaction
-                target_txn_id = f"tx_{hash(f'{dup.new_transaction_date}_{dup.new_transaction_payee}_{dup.new_transaction_amount}')}"
-                
+                # Use transaction fields to match since we now have proper transaction IDs
                 for api_txn in categorized_transactions:
-                    if api_txn.id == target_txn_id:
+                    if (api_txn.date == dup.new_transaction_date and 
+                        api_txn.payee == dup.new_transaction_payee and 
+                        api_txn.amount == dup.new_transaction_amount):
                         duplicate_map[api_txn.id] = dup
                         break
             
@@ -179,11 +197,10 @@ async def update_transactions_batch(request: TransactionUpdateBatchRequest):
         split_count = 0
         validation_errors = []
         
-        # Create transaction lookup by ID
+        # Create transaction lookup by transaction_id
         transaction_lookup = {}
         for i, transaction in enumerate(session.transactions):
-            transaction_id = f"tx_{hash(f'{transaction.date}_{transaction.payee}_{transaction.amount}')}"
-            transaction_lookup[transaction_id] = i
+            transaction_lookup[transaction.transaction_id] = i
         
         for update_data in update_dicts:
             transaction_id = update_data['transaction_id']
