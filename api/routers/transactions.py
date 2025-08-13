@@ -55,39 +55,20 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
         # Initialize transaction ID generator for this session
         id_generator = TransactionIdGenerator()
         
-        # Generate transaction IDs and validate OFX IDs for all transactions
+        # Validate and set OFX IDs (but don't generate transaction_id yet - will be done after user review)
         for transaction in session.transactions:
-            try:
-                # Generate SHA256-based transaction ID using mapped account with strict validation
-                transaction.transaction_id = id_generator.generate_id(
-                    date=transaction.date,
-                    payee=transaction.payee,
-                    amount=str(transaction.amount),
-                    mapped_account=request.confirmed_account,  # Use confirmed account for ID generation
-                    narration=transaction.memo,  # Use memo as narration
-                    is_kept_duplicate=False,  # Will handle kept duplicates later if needed
-                    strict_validation=True  # Enforce strict validation
-                )
-                
-                # Validate and set OFX ID from original_ofx_id
-                transaction.ofx_id = id_generator.validate_ofx_id(transaction.original_ofx_id)
-                
-            except TransactionIdValidationError as e:
-                # Critical validation error - terminate processing with clear error message
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Transaction data validation failed: {e}. "
-                           f"Transaction details - Date: {transaction.date}, "
-                           f"Payee: '{transaction.payee}', Amount: {transaction.amount}. "
-                           f"Please ensure all transaction data meets the required format."
-                )
+            # Validate and set OFX ID from original_ofx_id
+            transaction.ofx_id = id_generator.validate_ofx_id(transaction.original_ofx_id)
+            
+            # Initialize transaction_id as None - will be generated after user review
+            transaction.transaction_id = None
         
         # Perform ML categorization if classifier is available
         categorized_transactions = []
         high_confidence_count = 0
         confidence_threshold = get_confidence_threshold()
         
-        for transaction in session.transactions:
+        for index, transaction in enumerate(session.transactions):
             # Initialize with unknown category
             suggested_category = "Expenses:Unknown"
             confidence = 0.0
@@ -103,11 +84,14 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
                     if confidence >= confidence_threshold:
                         high_confidence_count += 1
                 except Exception as e:
-                    print(f"Categorization failed for transaction {transaction.transaction_id}: {e}")
+                    print(f"Categorization failed for transaction at index {index}: {e}")
             
-            # Create API transaction object with dual metadata
+            # Use array index as temporary ID since transaction_id will be generated after user review
+            temp_id = f"temp_{index}"
+            
+            # Create API transaction object
             api_transaction = TransactionAPI(
-                id=transaction.transaction_id,
+                id=temp_id,
                 date=transaction.date,
                 payee=transaction.payee,
                 memo=transaction.memo,
@@ -116,7 +100,7 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
                 suggested_category=suggested_category,
                 confidence=confidence,
                 is_potential_duplicate=False,  # Will be updated below
-                transaction_id=transaction.transaction_id,
+                transaction_id="",  # Will be generated after user review
                 ofx_id=transaction.ofx_id
             )
             
@@ -210,24 +194,25 @@ async def update_transactions_batch(request: TransactionUpdateBatchRequest):
         split_count = 0
         validation_errors = []
         
-        # Create transaction lookup by transaction_id
+        # Create transaction lookup by temporary ID (temp_index)
         transaction_lookup = {}
         for i, transaction in enumerate(session.transactions):
-            transaction_lookup[transaction.transaction_id] = i
+            temp_id = f"temp_{i}"
+            transaction_lookup[temp_id] = i
         
         for update_data in update_dicts:
-            transaction_id = update_data['transaction_id']
+            temp_id = update_data['transaction_id']  # This will be temp_X format
             
             # Find transaction
-            if transaction_id not in transaction_lookup:
+            if temp_id not in transaction_lookup:
                 validation_errors.append(ValidationError(
-                    transaction_id=transaction_id,
-                    error="Transaction not found",
-                    details=f"No transaction found with ID: {transaction_id}"
+                    transaction_id=temp_id,
+                    error="Transaction not found", 
+                    details=f"No transaction found with ID: {temp_id}"
                 ))
                 continue
             
-            transaction_index = transaction_lookup[transaction_id]
+            transaction_index = transaction_lookup[temp_id]
             transaction = session.transactions[transaction_index]
             
             try:
@@ -283,7 +268,7 @@ async def update_transactions_batch(request: TransactionUpdateBatchRequest):
                     # Check if splits balance with transaction amount
                     if abs(total_split_amount - abs(transaction.amount)) > Decimal('0.01'):
                         validation_errors.append(ValidationError(
-                            transaction_id=transaction_id,
+                            transaction_id=temp_id,
                             error="Split amounts do not balance",
                             details=f"Split total: {total_split_amount}, Transaction amount: {abs(transaction.amount)}"
                         ))
@@ -295,16 +280,48 @@ async def update_transactions_batch(request: TransactionUpdateBatchRequest):
                 transaction_validation_errors = validate_transaction(transaction)
                 if transaction_validation_errors:
                     validation_errors.append(ValidationError(
-                        transaction_id=transaction_id,
+                        transaction_id=temp_id,
                         error="Transaction validation failed",
                         details="; ".join(transaction_validation_errors)
                     ))
             
             except Exception as e:
                 validation_errors.append(ValidationError(
-                    transaction_id=transaction_id,
+                    transaction_id=temp_id,
                     error="Update processing failed",
                     details=str(e)
+                ))
+        
+        # Generate transaction IDs for all transactions after user updates
+        id_generator = TransactionIdGenerator()
+        
+        for transaction in session.transactions:
+            try:
+                # Determine the account to use for transaction_id generation
+                if transaction.categorized_accounts:
+                    # Use the first categorized account (for single category) or primary account for splits
+                    mapped_account = transaction.categorized_accounts[0].account
+                else:
+                    # Fallback to source account if no categorization
+                    mapped_account = transaction.account
+                
+                # Generate transaction_id using final user narration (not memo)
+                transaction.transaction_id = id_generator.generate_id(
+                    date=transaction.date,
+                    payee=transaction.payee,
+                    amount=str(transaction.amount),
+                    mapped_account=mapped_account,
+                    narration=transaction.narration or "",  # Use user's narration, not memo
+                    is_kept_duplicate=False,  # TODO: Handle kept duplicates if needed
+                    strict_validation=True
+                )
+                
+            except TransactionIdValidationError as e:
+                # Add validation error for transaction_id generation failure
+                validation_errors.append(ValidationError(
+                    transaction_id=f"temp_{session.transactions.index(transaction)}",
+                    error="Transaction ID generation failed",
+                    details=f"Failed to generate transaction_id: {e}"
                 ))
         
         return TransactionUpdateBatchResponse(
