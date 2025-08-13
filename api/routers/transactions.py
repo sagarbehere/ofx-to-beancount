@@ -22,7 +22,7 @@ from api.services.validator import validate_transaction_updates
 from core.classifier import categorize_transaction, get_confidence_threshold
 from core.duplicate_detector import detect_duplicates
 from core.beancount_generator import validate_transaction
-from core.transaction_id_generator import TransactionIdGenerator
+from core.transaction_id_generator import TransactionIdGenerator, TransactionIdValidationError
 
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -57,17 +57,30 @@ async def categorize_transactions(request: TransactionCategorizeRequest):
         
         # Generate transaction IDs and validate OFX IDs for all transactions
         for transaction in session.transactions:
-            # Generate SHA256-based transaction ID using mapped account
-            transaction.transaction_id = id_generator.generate_id(
-                date=transaction.date,
-                payee=transaction.payee,
-                amount=str(transaction.amount),
-                mapped_account=request.confirmed_account,  # Use confirmed account for ID generation
-                is_kept_duplicate=False  # Will handle kept duplicates later if needed
-            )
-            
-            # Validate and set OFX ID from original_ofx_id
-            transaction.ofx_id = id_generator.validate_ofx_id(transaction.original_ofx_id)
+            try:
+                # Generate SHA256-based transaction ID using mapped account with strict validation
+                transaction.transaction_id = id_generator.generate_id(
+                    date=transaction.date,
+                    payee=transaction.payee,
+                    amount=str(transaction.amount),
+                    mapped_account=request.confirmed_account,  # Use confirmed account for ID generation
+                    narration=transaction.memo,  # Use memo as narration
+                    is_kept_duplicate=False,  # Will handle kept duplicates later if needed
+                    strict_validation=True  # Enforce strict validation
+                )
+                
+                # Validate and set OFX ID from original_ofx_id
+                transaction.ofx_id = id_generator.validate_ofx_id(transaction.original_ofx_id)
+                
+            except TransactionIdValidationError as e:
+                # Critical validation error - terminate processing with clear error message
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Transaction data validation failed: {e}. "
+                           f"Transaction details - Date: {transaction.date}, "
+                           f"Payee: '{transaction.payee}', Amount: {transaction.amount}. "
+                           f"Please ensure all transaction data meets the required format."
+                )
         
         # Perform ML categorization if classifier is available
         categorized_transactions = []

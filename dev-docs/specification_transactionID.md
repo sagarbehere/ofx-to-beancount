@@ -1,8 +1,9 @@
 # Transaction ID Implementation Specification
 
-**Version:** 1.0  
-**Date:** 2025-01-12  
-**Status:** Implemented
+**Version:** 2.1  
+**Date:** 2025-01-13  
+**Status:** Implemented  
+**Breaking Changes:** Yes (see Migration Guide)
 
 ## Table of Contents
 
@@ -16,6 +17,7 @@
 8. [Testing and Validation](#testing-and-validation)
 9. [Troubleshooting](#troubleshooting)
 10. [Future Considerations](#future-considerations)
+11. [Breaking Changes and Migration Guide](#breaking-changes-and-migration-guide)
 
 ## Overview
 
@@ -54,15 +56,15 @@ Transaction identification is completely separate from human-readable descriptio
 
 ### Transaction ID Components
 
-A transaction ID is generated from exactly four immutable fields:
+A transaction ID is generated from exactly five immutable fields:
 
 ```
-Hash Input: "{date}|{payee}|{amount}|{account}"
+Hash Input: "{date}|{payee}|{narration}|{amount}|{account}"
 ```
 
 **Example:**
 ```
-Input: "2024-01-15|GROCERY STORE|-85.50|Liabilities:CreditCard"
+Input: "2024-01-15|GROCERY STORE|Weekly shopping|-85.50|Liabilities:CreditCard"
 Output: "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890"
 ```
 
@@ -76,11 +78,15 @@ Output: "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890"
    - Core identifying information
    - Handles empty/null payees gracefully
    
-3. **Amount**: Transaction amount with currency
+3. **Narration**: Transaction description or note
+   - Additional context for uniqueness
+   - Handles empty/null narrations gracefully
+   
+4. **Amount**: Transaction amount with currency
    - Critical differentiating factor
    - Includes sign (positive/negative)
    
-4. **Account**: Mapped Beancount account name
+5. **Account**: Mapped Beancount account name
    - Provides context about transaction source
    - Uses the confirmed/mapped account, not raw OFX account
 
@@ -152,7 +158,8 @@ class TransactionIdGenerator:
         """Initialize generator with empty state tracking."""
         
     def generate_id(self, date: str, payee: str, amount: Union[str, Decimal, float], 
-                   mapped_account: str, is_kept_duplicate: bool = False) -> str:
+                   mapped_account: str, narration: str = "", is_kept_duplicate: bool = False, 
+                   strict_validation: bool = False) -> str:
         """Generate unique transaction ID using SHA256 hash."""
         
     def validate_ofx_id(self, ofx_id: Optional[str]) -> Optional[str]:
@@ -170,13 +177,14 @@ class TransactionIdGenerator:
 1. **Input Validation and Normalization**
    ```python
    clean_payee = str(payee) if payee else ""
+   clean_narration = str(narration) if narration else ""
    clean_amount = str(amount) if amount else "0"
    clean_account = str(mapped_account).strip()
    ```
 
 2. **Hash Input Construction**
    ```python
-   hash_input = f"{date}|{clean_payee}|{clean_amount}|{clean_account}"
+   hash_input = f"{date}|{clean_payee}|{clean_narration}|{clean_amount}|{clean_account}"
    ```
 
 3. **SHA256 Hash Generation**
@@ -253,10 +261,11 @@ For simple use cases that don't require state tracking:
 
 ```python
 def generate_single_transaction_id(date: str, payee: str, amount: Union[str, Decimal, float], 
-                                 mapped_account: str) -> str:
+                                 mapped_account: str, narration: str = "",
+                                 strict_validation: bool = False) -> str:
     """Generate a single transaction ID without state tracking."""
     generator = TransactionIdGenerator()
-    return generator.generate_id(date, payee, amount, mapped_account)
+    return generator.generate_id(date, payee, amount, mapped_account, narration, strict_validation=strict_validation)
 
 def validate_single_ofx_id(ofx_id: Optional[str]) -> Optional[str]:
     """Validate a single OFX ID without instantiating generator."""
@@ -267,7 +276,7 @@ def validate_single_ofx_id(ofx_id: Optional[str]) -> Optional[str]:
 #### Module Constants
 
 ```python
-HASH_INPUT_FORMAT = "{date}|{payee}|{amount}|{account}"
+HASH_INPUT_FORMAT = "{date}|{payee}|{narration}|{amount}|{account}"
 FALLBACK_PREFIX = "fallback_"
 DUPLICATE_SUFFIX_FORMAT = "-dup-{counter}"
 COLLISION_SUFFIX_FORMAT = "-{counter}"
@@ -1209,7 +1218,8 @@ hash_input, hash_output = generator.generate_hash_components(
     date="2024-01-15",
     payee="STORE",
     amount="-100.00",
-    mapped_account="Assets:Checking"
+    mapped_account="Assets:Checking",
+    narration="Purchase"
 )
 print(f"Hash input: {hash_input}")
 print(f"Hash output: {hash_output}")
@@ -2220,6 +2230,247 @@ logger.info(f"Generated ID {txn_id} for transaction {date} {payee}")
 logger.warning(f"Hash collision detected, using suffix: {final_id}")
 logger.debug(f"Hash input: {hash_input}")
 ```
+
+---
+
+## Breaking Changes and Migration Guide
+
+### Version 2.1 Changes (January 2025)
+
+**IMPORTANT**: Version 2.1 of `transaction_id_generator.py` introduces breaking changes that improve transaction ID uniqueness and handle edge cases better. All projects using this module must update their integration code.
+
+#### Summary of Changes
+
+1. **New Exception Class**: Added `TransactionIdValidationError` for validation failures
+2. **Strict Validation Mode**: Added `strict_validation` parameter to enforce data quality  
+3. **Enhanced Field Validation**: All critical fields are now validated in strict mode
+4. **Narration Field Added**: Transaction hash now includes narration field for better uniqueness
+5. **Flexible Content Validation**: Either payee OR narration must be non-empty (not both)
+6. **Backwards Compatibility**: Legacy behavior preserved when `strict_validation=False`
+
+#### New Validation Requirements
+
+When `strict_validation=True`, the following fields are strictly validated:
+
+| Field | Validation Rules | Examples |
+|-------|------------------|----------|
+| `date` | Must be valid YYYY-MM-DD format | ✅ "2024-01-15"<br/>❌ "2024-13-45", "invalid-date", "" |
+| `payee` | Must be non-empty OR narration must be non-empty | ✅ "GROCERY STORE"<br/>✅ "" (if narration is non-empty)<br/>❌ "" (if narration is also empty) |
+| `narration` | Must be non-empty OR payee must be non-empty | ✅ "Weekly shopping"<br/>✅ "" (if payee is non-empty)<br/>❌ "" (if payee is also empty) |
+| `amount` | Must contain valid numeric value | ✅ "-85.50", "-85.50 USD"<br/>❌ "not-a-number", "", "USD" |
+| `mapped_account` | Must be non-empty string | ✅ "Liabilities:CreditCard"<br/>❌ "", "   ", None |
+
+#### Migration Instructions for Projects
+
+##### 1. Update Import Statements
+
+**Before (Version 1.x):**
+```python
+from core.transaction_id_generator import generate_single_transaction_id, TransactionIdGenerator
+```
+
+**After (Version 2.0):**
+```python
+from core.transaction_id_generator import (
+    generate_single_transaction_id, 
+    TransactionIdGenerator, 
+    TransactionIdValidationError  # NEW: Import the exception class
+)
+```
+
+##### 2. Update Function Calls
+
+**Before (Version 1.x):**
+```python
+# Old way - no validation parameter, no narration
+transaction_id = generate_single_transaction_id(
+    date=txn_date,
+    payee=txn_payee,
+    amount=txn_amount,
+    mapped_account=account_name
+)
+```
+
+**After (Version 2.1) - Option A: Enable Strict Validation (Recommended)**
+```python
+# New way - with narration and strict validation enabled
+try:
+    transaction_id = generate_single_transaction_id(
+        date=txn_date,
+        payee=txn_payee,
+        amount=txn_amount,
+        mapped_account=account_name,
+        narration=txn_narration,  # NEW: Include narration
+        strict_validation=True    # NEW: Enable validation
+    )
+except TransactionIdValidationError as e:
+    # Handle validation error with context-specific message
+    raise YourProjectException(f"Transaction validation failed at {location}: {e}")
+```
+
+**After (Version 2.1) - Option B: Maintain Legacy Behavior**
+```python
+# Maintains old behavior for gradual migration (note: still need to pass narration for API compatibility)
+transaction_id = generate_single_transaction_id(
+    date=txn_date,
+    payee=txn_payee,
+    amount=txn_amount,
+    mapped_account=account_name,
+    narration="",             # NEW: Pass empty narration for backwards compatibility
+    strict_validation=False   # Keep legacy behavior
+)
+```
+
+##### 3. Update Generator Class Usage
+
+**Before (Version 1.x):**
+```python
+generator = TransactionIdGenerator()
+txn_id = generator.generate_id(date, payee, amount, account)
+```
+
+**After (Version 2.1):**
+```python
+generator = TransactionIdGenerator()
+try:
+    txn_id = generator.generate_id(
+        date, payee, amount, account, 
+        narration=narration,        # NEW: Add narration parameter
+        strict_validation=True      # NEW: Add validation parameter
+    )
+except TransactionIdValidationError as e:
+    # Handle validation error appropriately for your project
+    handle_validation_error(e, transaction_context)
+```
+
+#### Error Handling Patterns
+
+##### Pattern 1: CLI Applications
+```python
+def process_transaction_for_cli(txn_data, file_path, line_number):
+    try:
+        return generate_single_transaction_id(
+            date=txn_data.date,
+            payee=txn_data.payee,
+            amount=f"{txn_data.amount} {txn_data.currency}",
+            mapped_account=txn_data.account,
+            narration=txn_data.narration,  # NEW: Include narration
+            strict_validation=True
+        )
+    except TransactionIdValidationError as e:
+        # Provide file context for CLI users
+        print(f"❌ ERROR: {file_path}:{line_number} - {e}")
+        print("Please fix the transaction data and try again.")
+        sys.exit(1)
+```
+
+##### Pattern 2: API Applications
+```python
+def process_transaction_for_api(txn_data):
+    try:
+        return generate_single_transaction_id(
+            date=txn_data.date,
+            payee=txn_data.payee,
+            amount=str(txn_data.amount),
+            mapped_account=txn_data.account,
+            narration=txn_data.narration,  # NEW: Include narration
+            strict_validation=True
+        )
+    except TransactionIdValidationError as e:
+        # Convert to HTTP error for API clients
+        raise HTTPException(
+            status_code=400,
+            detail=f"Transaction validation failed: {e}. "
+                   f"Transaction: {txn_data.date} '{txn_data.payee}' {txn_data.amount}"
+        )
+```
+
+##### Pattern 3: Library/Framework Integration
+```python
+class TransactionProcessor:
+    def __init__(self, strict_mode=True):
+        self.strict_mode = strict_mode
+        self.generator = TransactionIdGenerator()
+    
+    def process_transaction(self, transaction):
+        try:
+            transaction.id = self.generator.generate_id(
+                date=transaction.date,
+                payee=transaction.payee,
+                amount=transaction.amount,
+                mapped_account=transaction.account,
+                narration=transaction.narration,  # NEW: Include narration
+                strict_validation=self.strict_mode
+            )
+            return transaction
+        except TransactionIdValidationError as e:
+            if self.strict_mode:
+                # Strict mode: fail fast with detailed error
+                raise ProcessingError(f"Invalid transaction data: {e}")
+            else:
+                # Fallback mode: log warning and continue
+                logger.warning(f"Transaction validation failed: {e}")
+                return self._handle_invalid_transaction(transaction)
+```
+
+#### Testing Your Migration
+
+Create test cases to verify your migration:
+
+```python
+def test_validation_migration():
+    """Test that validation errors are properly handled."""
+    
+    # Test 1: Valid data should work
+    valid_id = generate_single_transaction_id(
+        "2024-01-15", "STORE", "-100.00", "Assets:Checking", "Purchase",
+        strict_validation=True
+    )
+    assert len(valid_id) == 64
+    
+    # Test 2: Invalid data should raise TransactionIdValidationError (both payee and narration empty)
+    with pytest.raises(TransactionIdValidationError):
+        generate_single_transaction_id(
+            "2024-01-15", "", "-100.00", "Assets:Checking", "",  # Both payee and narration empty
+            strict_validation=True
+        )
+    
+    # Test 3: Valid data with empty payee but non-empty narration should work
+    valid_id_narration = generate_single_transaction_id(
+        "2024-01-15", "", "-100.00", "Assets:Checking", "Auto-generated transaction",
+        strict_validation=True
+    )
+    assert len(valid_id_narration) == 64
+    
+    # Test 4: Backwards compatibility should work
+    legacy_id = generate_single_transaction_id(
+        "2024-01-15", "", "-100.00", "Assets:Checking", "",  # Both empty
+        strict_validation=False  # Should not raise error
+    )
+    assert len(legacy_id) == 64
+```
+
+#### Migration Checklist
+
+- [ ] Update import statements to include `TransactionIdValidationError`
+- [ ] Add `narration` parameter to all `generate_id()` calls  
+- [ ] Add `strict_validation=True` parameter to all `generate_id()` calls
+- [ ] Wrap calls in try-catch blocks to handle `TransactionIdValidationError`
+- [ ] Implement project-specific error handling and user messaging
+- [ ] Add test cases for both valid and invalid transaction data
+- [ ] Test edge cases where payee is empty but narration is meaningful
+- [ ] Update documentation to reflect new validation requirements and narration field
+- [ ] Consider gradual rollout using `strict_validation=False` initially
+
+#### Recommended Migration Strategy
+
+1. **Phase 1**: Update imports and add narration parameter (empty string for compatibility) with `strict_validation=False`
+2. **Phase 2**: Add error handling code and test with `strict_validation=True` in development
+3. **Phase 3**: Update code to pass meaningful narration values where available
+4. **Phase 4**: Enable `strict_validation=True` in production with proper error handling
+5. **Phase 5**: Remove fallback logic and fully embrace strict validation
+
+This phased approach allows for gradual migration while maintaining system stability.
 
 ---
 

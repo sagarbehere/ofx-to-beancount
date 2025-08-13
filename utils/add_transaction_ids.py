@@ -39,7 +39,7 @@ import io
 # Import our reusable transaction ID generator
 # Add parent directory to path to access core module
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.transaction_id_generator import generate_single_transaction_id
+from core.transaction_id_generator import generate_single_transaction_id, TransactionIdValidationError
 
 
 # Exit codes for different error conditions
@@ -251,6 +251,9 @@ def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = 
                         if verbose:
                             print(f"   ⚠️  Skipped (error): {entry.date} {entry.payee or '(no payee)'}")
                         
+            except ProcessingError as e:
+                # ProcessingError indicates a fatal data quality issue - terminate immediately
+                handle_error("DATA_VALIDATION_ERROR", str(e), EXIT_PROCESSING_ERROR)
             except Exception as e:
                 stats['processing_errors'] += 1
                 processed_entries.append(entry)  # Keep original entry
@@ -299,12 +302,15 @@ def process_transaction(txn: data.Transaction, verbose: bool = False) -> Tuple[d
         # Select account and amount using priority logic
         account, amount_currency = select_account_for_hash(txn)
         
-        # Generate transaction ID using same logic as main converter
+        # Generate transaction ID using strict validation
+        # This will raise TransactionIdValidationError if any critical field is invalid
         transaction_id = generate_single_transaction_id(
             date=txn.date.strftime('%Y-%m-%d'),
             payee=txn.payee or "",
             amount=amount_currency,
-            mapped_account=account
+            mapped_account=account,
+            narration=txn.narration or "",
+            strict_validation=True
         )
         
         # Add transaction_id metadata
@@ -315,6 +321,23 @@ def process_transaction(txn: data.Transaction, verbose: bool = False) -> Tuple[d
         
         return modified_txn, True
         
+    except TransactionIdValidationError as e:
+        # Convert to ProcessingError with file location context
+        filename = txn.meta.get('filename', 'unknown file') if txn.meta else 'unknown file'
+        lineno = txn.meta.get('lineno', 'unknown line') if txn.meta else 'unknown line'
+        location = f"{filename}:{lineno}"
+        
+        # Add specific guidance for common payee/narration field issue
+        if "Both payee and narration fields are empty" in str(e):
+            detailed_message = (
+                f"Transaction at {location} has both empty payee and narration fields. "
+                f"At least one of these fields must contain meaningful content for transaction ID generation. "
+                f"Please ensure the transaction has either a proper payee or narration."
+            )
+        else:
+            detailed_message = f"Transaction at {location}: {e}"
+        
+        raise ProcessingError(detailed_message)
     except Exception as e:
         if verbose:
             print(f"      Error: {e}")

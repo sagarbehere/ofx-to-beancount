@@ -5,13 +5,24 @@ This module provides a reusable service for generating SHA256-based transaction 
 with collision handling and OFX ID validation. It's designed to be framework-agnostic
 and easily portable to other projects.
 
-Dependencies: Only standard library modules (hashlib, secrets, typing)
+Dependencies: Only standard library modules (hashlib, secrets, typing, datetime)
 """
 
 import hashlib
 import secrets
 from typing import Dict, Set, Optional, Tuple, Union
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from datetime import datetime
+
+
+class TransactionIdValidationError(Exception):
+    """
+    Exception raised when transaction data fails validation for ID generation.
+    
+    This exception is raised when critical fields required for transaction_id
+    generation are missing, empty, or have invalid formats in strict validation mode.
+    """
+    pass
 
 
 class TransactionIdGenerator:
@@ -46,21 +57,28 @@ class TransactionIdGenerator:
                    payee: str, 
                    amount: Union[str, Decimal, float], 
                    mapped_account: str, 
-                   is_kept_duplicate: bool = False) -> str:
+                   narration: str = "",
+                   is_kept_duplicate: bool = False,
+                   strict_validation: bool = False) -> str:
         """
         Generate unique transaction ID using SHA256 hash of immutable fields.
         
-        The hash input format is: "{date}|{payee}|{amount}|{mapped_account}"
+        The hash input format is: "{date}|{payee}|{narration}|{amount}|{mapped_account}"
         
         Args:
             date: Transaction date in YYYY-MM-DD format
             payee: Transaction payee/merchant name
             amount: Transaction amount (can be string, Decimal, or float)
             mapped_account: Beancount account name (e.g., "Assets:Checking")
+            narration: Transaction narration/description
             is_kept_duplicate: Whether this is a kept duplicate transaction
+            strict_validation: If True, enforce strict validation of all fields
             
         Returns:
             64-character SHA256 hash string, potentially with suffix for collisions/duplicates
+            
+        Raises:
+            TransactionIdValidationError: If strict_validation=True and any field is invalid
             
         Examples:
             # Normal transaction
@@ -68,16 +86,26 @@ class TransactionIdGenerator:
             >>> gen.generate_id("2024-01-15", "GROCERY STORE", "-85.50", "Liabilities:CreditCard")
             'a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890'
             
+            # Strict validation
+            >>> gen.generate_id("2024-01-15", "", "-85.50", "Liabilities:CreditCard", strict_validation=True)
+            TransactionIdValidationError: Payee field is empty or whitespace-only
+            
             # Kept duplicate
             >>> gen.generate_id("2024-01-15", "GROCERY STORE", "-85.50", "Liabilities:CreditCard", True)
             'a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890-dup-1'
             
-            # Fallback when no account
+            # Fallback when no account (disabled in strict mode)
             >>> gen.generate_id("2024-01-15", "GROCERY STORE", "-85.50", "")
             'fallback_a1b2c3d4'
         """
-        # Fallback if mapped account not available
+        # Perform strict validation if requested
+        if strict_validation:
+            self._validate_fields(date, payee, amount, mapped_account, narration)
+        
+        # Fallback if mapped account not available (disabled in strict mode)
         if not mapped_account or not str(mapped_account).strip():
+            if strict_validation:
+                raise TransactionIdValidationError("Mapped account field is empty or whitespace-only")
             random_suffix = secrets.token_hex(4)  # 8 char random string
             fallback_id = f"fallback_{random_suffix}"
             self.used_ids.add(fallback_id)
@@ -85,11 +113,12 @@ class TransactionIdGenerator:
         
         # Normalize inputs
         clean_payee = str(payee) if payee else ""
+        clean_narration = str(narration) if narration else ""
         clean_amount = str(amount) if amount else "0"
         clean_account = str(mapped_account).strip()
         
         # Create hash input
-        hash_input = f"{date}|{clean_payee}|{clean_amount}|{clean_account}"
+        hash_input = f"{date}|{clean_payee}|{clean_narration}|{clean_amount}|{clean_account}"
         base_hash = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
         
         # Handle kept duplicates
@@ -101,6 +130,62 @@ class TransactionIdGenerator:
         
         self.used_ids.add(final_id)
         return final_id
+    
+    def _validate_fields(self, date: str, payee: str, amount: Union[str, Decimal, float], mapped_account: str, narration: str = "") -> None:
+        """
+        Validate all critical fields required for transaction ID generation.
+        
+        Args:
+            date: Transaction date string 
+            payee: Transaction payee string
+            amount: Transaction amount
+            mapped_account: Beancount account name
+            narration: Transaction narration string
+            
+        Raises:
+            TransactionIdValidationError: If any field is invalid
+        """
+        # Validate date
+        if not date or not str(date).strip():
+            raise TransactionIdValidationError("Date field is empty or whitespace-only")
+        
+        date_str = str(date).strip()
+        try:
+            # Validate YYYY-MM-DD format and that it represents a valid date
+            datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            raise TransactionIdValidationError(f"Date field '{date_str}' is not in valid YYYY-MM-DD format or represents an invalid date")
+        
+        # Validate payee OR narration (at least one must be non-empty)
+        payee_str = str(payee).strip() if payee else ""
+        narration_str = str(narration).strip() if narration else ""
+        
+        if not payee_str and not narration_str:
+            raise TransactionIdValidationError("Both payee and narration fields are empty - at least one must contain meaningful content")
+        
+        # Validate amount
+        if amount is None:
+            raise TransactionIdValidationError("Amount field is None")
+        
+        amount_str = str(amount).strip()
+        if not amount_str:
+            raise TransactionIdValidationError("Amount field is empty or whitespace-only")
+        
+        try:
+            # Handle amounts with currency (e.g., "-11.75 USD" or just "-11.75")
+            # Split on whitespace and try to parse the first part as a number
+            amount_parts = amount_str.split()
+            if amount_parts:
+                # Try to parse the numeric part (first part)
+                Decimal(amount_parts[0])
+            else:
+                raise TransactionIdValidationError(f"Amount field '{amount_str}' is empty after splitting")
+        except (InvalidOperation, ValueError):
+            raise TransactionIdValidationError(f"Amount field '{amount_str}' does not contain a valid number")
+        
+        # Validate mapped account
+        if not mapped_account or not str(mapped_account).strip():
+            raise TransactionIdValidationError("Mapped account field is empty or whitespace-only")
     
     def _handle_kept_duplicate(self, base_hash: str) -> str:
         """Handle kept duplicate ID generation with -dup-N suffix."""
@@ -149,7 +234,7 @@ class TransactionIdGenerator:
         
         return cleaned
     
-    def generate_hash_components(self, date: str, payee: str, amount: Union[str, Decimal, float], mapped_account: str) -> Tuple[str, str]:
+    def generate_hash_components(self, date: str, payee: str, amount: Union[str, Decimal, float], mapped_account: str, narration: str = "") -> Tuple[str, str]:
         """
         Generate hash components for debugging/testing purposes.
         
@@ -158,15 +243,17 @@ class TransactionIdGenerator:
             payee: Transaction payee
             amount: Transaction amount
             mapped_account: Beancount account
+            narration: Transaction narration/description
             
         Returns:
             Tuple of (hash_input_string, sha256_hash)
         """
         clean_payee = str(payee) if payee else ""
+        clean_narration = str(narration) if narration else ""
         clean_amount = str(amount) if amount else "0"
         clean_account = str(mapped_account).strip()
         
-        hash_input = f"{date}|{clean_payee}|{clean_amount}|{clean_account}"
+        hash_input = f"{date}|{clean_payee}|{clean_narration}|{clean_amount}|{clean_account}"
         hash_output = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
         
         return hash_input, hash_output
@@ -193,7 +280,9 @@ class TransactionIdGenerator:
 def generate_single_transaction_id(date: str, 
                                  payee: str, 
                                  amount: Union[str, Decimal, float], 
-                                 mapped_account: str) -> str:
+                                 mapped_account: str,
+                                 narration: str = "",
+                                 strict_validation: bool = False) -> str:
     """
     Convenience function to generate a single transaction ID without state tracking.
     
@@ -205,16 +294,24 @@ def generate_single_transaction_id(date: str,
         payee: Transaction payee/merchant name
         amount: Transaction amount
         mapped_account: Beancount account name
+        narration: Transaction narration/description
+        strict_validation: If True, enforce strict validation of all fields
         
     Returns:
         64-character SHA256 hash string
         
-    Example:
-        >>> generate_single_transaction_id("2024-01-15", "GROCERY STORE", "-85.50", "Liabilities:CreditCard")
+    Raises:
+        TransactionIdValidationError: If strict_validation=True and any field is invalid
+        
+    Examples:
+        >>> generate_single_transaction_id("2024-01-15", "GROCERY STORE", "-85.50", "Liabilities:CreditCard", "Weekly shopping")
         'a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890'
+        
+        >>> generate_single_transaction_id("2024-01-15", "", "-85.50", "Liabilities:CreditCard", "", strict_validation=True)
+        TransactionIdValidationError: Both payee and narration fields are empty - at least one must contain meaningful content
     """
     generator = TransactionIdGenerator()
-    return generator.generate_id(date, payee, amount, mapped_account)
+    return generator.generate_id(date, payee, amount, mapped_account, narration, strict_validation=strict_validation)
 
 
 def validate_single_ofx_id(ofx_id: Optional[str]) -> Optional[str]:
@@ -236,7 +333,7 @@ def validate_single_ofx_id(ofx_id: Optional[str]) -> Optional[str]:
 
 
 # Module-level constants for external use
-HASH_INPUT_FORMAT = "{date}|{payee}|{amount}|{account}"
+HASH_INPUT_FORMAT = "{date}|{payee}|{narration}|{amount}|{account}"
 FALLBACK_PREFIX = "fallback_"
 DUPLICATE_SUFFIX_FORMAT = "-dup-{counter}"
 COLLISION_SUFFIX_FORMAT = "-{counter}"
@@ -274,6 +371,6 @@ if __name__ == "__main__":
     print(f"Generator stats: {stats}")
     
     # Show hash components
-    hash_input, hash_output = generator.generate_hash_components("2024-01-15", "GROCERY STORE", "-85.50", "Liabilities:CreditCard")
+    hash_input, hash_output = generator.generate_hash_components("2024-01-15", "GROCERY STORE", "-85.50", "Liabilities:CreditCard", "Weekly shopping")
     print(f"Hash input: {hash_input}")
     print(f"Hash output: {hash_output}")

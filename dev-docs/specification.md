@@ -390,10 +390,18 @@ The system follows this precedence order for configuration values:
 ### Transaction Format
 - **Date format**: Standard Beancount format (YYYY-MM-DD)
 - **Transaction IDs**: Include unique identifier as metadata field `transaction_id` using SHA256 hash of immutable fields
-- **ID Generation**: SHA256 hash of concatenated string: `date|payee|amount|mapped_beancount_account`
+- **ID Generation**: SHA256 hash of concatenated string: `date|payee|narration|amount|mapped_beancount_account`
+- **ID Field Validation**: All critical fields used in transaction_id generation are strictly validated:
+  - `date`: Must be non-empty and in valid YYYY-MM-DD format representing a real date
+  - `payee`: Must be non-empty string OR narration must be non-empty (at least one required)
+  - `narration`: Must be non-empty string OR payee must be non-empty (at least one required)  
+  - `amount`: Must contain a valid numeric value (may include currency, e.g., "-85.50 USD")
+  - `mapped_beancount_account`: Must be non-empty valid account name
+- **Validation Failure Handling**: If any critical field is empty/invalid, system terminates with clear error message specifying the problematic transaction and required fix
+- **Data Quality Enforcement**: No fallback processing for empty critical fields - users must fix data quality issues
+- **Flexible Content Requirements**: Transactions may have empty payee if narration is meaningful, or empty narration if payee is meaningful
 - **ID Collision Handling**: Append `-2`, `-3`, etc. for hash collisions within the same OFX file
 - **Duplicate Transaction IDs**: For potential duplicates that users choose to keep, append `-dup-1`, `-dup-2`, etc.
-- **ID Fallback**: If mapped account unavailable, use raw OFX account + short random string
 - **OFX Source IDs**: Include original OFX transaction ID as metadata field `ofx_id` when available and valid
 - **OFX ID Handling**: Omit `ofx_id` metadata if OFX file lacks transaction ID or ID is malformed/empty
 - **Directives**: Focus only on transaction directives (ignore open/close/balance statements)
