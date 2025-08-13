@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 import uuid
 
 from .transaction import Transaction, TransactionAPI, SystemMessage
+# Import Beancount transaction type for storage
+from beancount.core.data import Transaction as BeancountTransaction
 
 
 @dataclass
@@ -26,8 +28,9 @@ class SessionData:
     training_file_path: Optional[str] = None
     account_file_path: Optional[str] = None
     
-    # Processed data
-    transactions: List[Transaction] = field(default_factory=list)
+    # Processed data - store both formats
+    transactions: List[Transaction] = field(default_factory=list)  # API format for backward compatibility
+    beancount_transactions: List[BeancountTransaction] = field(default_factory=list)  # Canonical format after transaction_id generation
     valid_accounts: List[str] = field(default_factory=list)
     classifier_model: Optional[Any] = None
     detected_account: Optional[str] = None

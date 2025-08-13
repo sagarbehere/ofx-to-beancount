@@ -91,6 +91,10 @@ def generate_beancount_transaction(transaction: Transaction) -> str:
         # Add dual metadata (transaction_id always, ofx_id conditionally)
         lines.append(f'  transaction_id: "{transaction.transaction_id}"')
         
+        # Add source_account metadata to track which account was the OFX source
+        # This ensures add_transaction_ids.py can use the same account for ID regeneration
+        lines.append(f'  source_account: "{transaction.account}"')
+        
         # Add ofx_id metadata only if available and valid
         if transaction.ofx_id:
             lines.append(f'  ofx_id: "{transaction.ofx_id}"')

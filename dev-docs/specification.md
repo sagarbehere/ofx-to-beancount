@@ -4,6 +4,24 @@
 
 This project creates an application that reads financial transactions from OFX (Open Financial Exchange) files and converts them to Beancount format with intelligent categorization. The system provides both API and CLI interfaces for processing transactions with machine learning-based categorization and interactive user verification.
 
+## Architecture
+
+### Clean API/Core Separation
+The system employs a clean separation between the API layer and core processing:
+
+- **CLI Client**: Lightweight, sends file paths and receives/sends JSON transaction data
+- **API Layer**: Handles HTTP communication using generic JSON-based models (`TransactionAPI`, `PostingAPI`)  
+- **Server Core**: Converts API models to standard Beancount objects for all transaction processing
+- **Output Generation**: Uses Beancount's native printer to ensure consistent formatting
+
+### Transaction ID Generation
+All transaction ID generation uses standard `beancount.core.data.Transaction` objects to guarantee consistency across:
+- Main OFX converter output
+- `add_transaction_ids.py` utility script  
+- Any other tools using the `transaction_id_generator.py` module
+
+This ensures perfect transaction ID consistency regardless of the processing path.
+
 ## Core Functionality
 
 ### 1. OFX File Processing
@@ -541,7 +559,7 @@ For each transaction:
 ```
 1. POST /session/initialize
    ├── Load and Parse Configuration File
-   ├── Parse OFX File
+   ├── Parse OFX File (server-side)
    ├── Map Account (with config)
    ├── Train ML Classifier 
    └── Return session info + detected account
@@ -549,17 +567,22 @@ For each transaction:
 2. POST /transactions/categorize
    ├── Auto-categorize all transactions
    ├── Detect potential duplicates
-   └── Return categorized transactions
+   └── Return categorized transactions (JSON API format)
 
 3. POST /transactions/update-batch  
-   ├── Process user corrections
+   ├── Process user corrections (JSON API format)
+   ├── Convert API → Beancount objects
+   ├── Generate transaction IDs using Beancount objects
+   ├── Store Beancount objects as canonical format
    ├── Handle transaction splits
    ├── Validate postings balance
    └── Return validation results
 
 4. POST /export/beancount
-   ├── Generate Beancount format
-   ├── Append to output file
+   ├── Use stored Beancount objects
+   ├── Apply final filtering (skip marked transactions)
+   ├── Generate output using native Beancount printer
+   └── Write to output file
    └── Return export summary
 ```
 
@@ -571,6 +594,16 @@ File Paths → Initialize Session → Categorize All → Interactive Batch Updat
 ```
 
 **Note**: All file operations (config parsing, OFX parsing, training data loading) are handled server-side. The CLI client sends only file paths to the API server.
+
+### Output Consistency
+Both the main OFX converter and the `add_transaction_ids.py` utility script produce identical output:
+
+- **Same Transaction Objects**: Both use standard `beancount.core.data.Transaction` objects
+- **Same ID Generation**: Both use `core/transaction_id_generator.py` with Beancount objects  
+- **Same Output Format**: Both use Beancount's native `printer.print_entries()`
+- **Same Metadata**: Source account is preserved in `source_account` metadata for consistency
+
+This guarantees that running `add_transaction_ids.py --force-recalculate` on OFX converter output produces identical transaction IDs and formatting.
 
 ## File Structure
 
@@ -601,10 +634,12 @@ ofx-to-beancount/
 │   └── api_client.py        # API communication
 ├── core/
 │   ├── __init__.py
-│   ├── ofx_parser.py        # OFX file processing
+│   ├── ofx_parser.py        # OFX file processing (produces API Transaction objects)
 │   ├── account_mapper.py    # Account mapping logic
 │   ├── classifier.py        # ML categorization
-│   ├── beancount_generator.py # Output generation
+│   ├── beancount_converter.py # API ↔ Beancount object conversion
+│   ├── transaction_id_generator.py # SHA256-based transaction ID generation
+│   ├── beancount_generator.py # Legacy output generation (file operations)
 │   └── duplicate_detector.py # Duplicate detection
 ├── config/
 │   └── example_config.yaml  # Sample configuration

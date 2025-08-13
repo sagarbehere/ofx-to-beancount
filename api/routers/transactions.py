@@ -293,36 +293,39 @@ async def update_transactions_batch(request: TransactionUpdateBatchRequest):
                 ))
         
         # Generate transaction IDs for all transactions after user updates
-        id_generator = TransactionIdGenerator()
+        # Use Beancount objects for consistent transaction_id generation
+        from core.beancount_converter import create_beancount_transaction_from_api, beancount_to_api_transaction
+        from core.transaction_id_generator import TransactionIdGenerator
         
-        for transaction in session.transactions:
+        id_generator = TransactionIdGenerator()
+        beancount_transactions = []
+        
+        for i, transaction in enumerate(session.transactions):
             try:
-                # Determine the account to use for transaction_id generation
-                if transaction.categorized_accounts:
-                    # Use the first categorized account (for single category) or primary account for splits
-                    mapped_account = transaction.categorized_accounts[0].account
-                else:
-                    # Fallback to source account if no categorization
-                    mapped_account = transaction.account
-                
-                # Generate transaction_id using final user narration (not memo)
-                transaction.transaction_id = id_generator.generate_id(
-                    date=transaction.date,
-                    payee=transaction.payee,
-                    amount=str(transaction.amount),
-                    mapped_account=mapped_account,
-                    narration=transaction.narration or "",  # Use user's narration, not memo
-                    is_kept_duplicate=False,  # TODO: Handle kept duplicates if needed
-                    strict_validation=True
+                # Convert API transaction to Beancount format and generate transaction_id
+                bc_transaction = create_beancount_transaction_from_api(
+                    api_txn=transaction,
+                    source_account=transaction.account,
+                    id_generator=id_generator
                 )
+                
+                # Store the Beancount transaction as canonical format
+                beancount_transactions.append(bc_transaction)
+                
+                # Update API transaction for backward compatibility
+                updated_transaction = beancount_to_api_transaction(bc_transaction)
+                session.transactions[i] = updated_transaction
                 
             except TransactionIdValidationError as e:
                 # Add validation error for transaction_id generation failure
                 validation_errors.append(ValidationError(
-                    transaction_id=f"temp_{session.transactions.index(transaction)}",
+                    transaction_id=f"temp_{i}",
                     error="Transaction ID generation failed",
                     details=f"Failed to generate transaction_id: {e}"
                 ))
+        
+        # Store Beancount transactions as canonical format
+        session.beancount_transactions = beancount_transactions
         
         return TransactionUpdateBatchResponse(
             updated_count=updated_count,

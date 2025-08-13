@@ -16,7 +16,7 @@ from api.models.session import (
 from api.services.session_manager import get_session_manager
 from api.services.validator import validate_export_request
 from core.beancount_generator import (
-    format_beancount_output, append_to_beancount_file, write_to_beancount_file,
+    append_to_beancount_file, write_to_beancount_file,
     generate_export_summary, preview_beancount_output, validate_transaction
 )
 
@@ -57,38 +57,53 @@ async def export_beancount(request: ExportBeancountRequest):
                 detail=f"Validation errors: {'; '.join(validation_errors)}"
             )
         
-        # Filter transactions for export
-        transactions_to_export = []
+        # Filter Beancount transactions for export (use canonical format)
+        beancount_transactions_to_export = []
         validation_errors = []
         
-        for transaction in session.transactions:
-            # Skip transactions marked for skipping
-            if transaction.narration and "SKIP:" in transaction.narration:
-                continue
+        # Use Beancount transactions if available, fall back to API transactions for backward compatibility
+        if hasattr(session, 'beancount_transactions') and session.beancount_transactions:
+            for bc_transaction in session.beancount_transactions:
+                # Skip transactions marked for skipping
+                if bc_transaction.narration and "SKIP:" in bc_transaction.narration:
+                    continue
+                
+                beancount_transactions_to_export.append(bc_transaction)
+        else:
+            # Backward compatibility: convert from API transactions
+            print("Warning: Using API transactions for export (backward compatibility mode)")
+            from core.beancount_converter import api_transaction_to_beancount
             
-            # Validate transaction before export
-            transaction_errors = validate_transaction(transaction)
-            if transaction_errors:
-                validation_errors.extend([
-                    f"Transaction {transaction.transaction_id}: {error}"
-                    for error in transaction_errors
-                ])
-                continue  # Skip invalid transactions
-            
-            # Ensure transaction has categorized accounts
-            if not transaction.categorized_accounts:
-                # Add default unknown category
-                from api.models.transaction import Posting
-                unknown_posting = Posting(
-                    account="Expenses:Unknown",
-                    amount=abs(transaction.amount),
-                    currency=transaction.currency
-                )
-                transaction.categorized_accounts = [unknown_posting]
-            
-            transactions_to_export.append(transaction)
+            for transaction in session.transactions:
+                # Skip transactions marked for skipping
+                if transaction.narration and "SKIP:" in transaction.narration:
+                    continue
+                
+                # Validate transaction before export
+                transaction_errors = validate_transaction(transaction)
+                if transaction_errors:
+                    validation_errors.extend([
+                        f"Transaction {transaction.transaction_id}: {error}"
+                        for error in transaction_errors
+                    ])
+                    continue  # Skip invalid transactions
+                
+                # Ensure transaction has categorized accounts
+                if not transaction.categorized_accounts:
+                    # Add default unknown category
+                    from api.models.transaction import Posting
+                    unknown_posting = Posting(
+                        account="Expenses:Unknown",
+                        amount=abs(transaction.amount),
+                        currency=transaction.currency
+                    )
+                    transaction.categorized_accounts = [unknown_posting]
+                
+                # Convert to Beancount format
+                bc_transaction = api_transaction_to_beancount(transaction, transaction.account)
+                beancount_transactions_to_export.append(bc_transaction)
         
-        if not transactions_to_export:
+        if not beancount_transactions_to_export:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No valid transactions to export"
@@ -98,9 +113,18 @@ async def export_beancount(request: ExportBeancountRequest):
             # Return validation errors but don't fail completely
             print(f"Transaction validation warnings: {'; '.join(validation_errors)}")
         
-        # Generate Beancount output
+        # Generate Beancount output using native printer (same as add_transaction_ids.py)
         try:
-            beancount_content = format_beancount_output(transactions_to_export)
+            from beancount.parser import printer
+            from core.beancount_converter import clean_internal_metadata_for_output
+            import io
+            
+            # Clean up internal metadata before final output
+            clean_transactions = clean_internal_metadata_for_output(beancount_transactions_to_export)
+            
+            output_content = io.StringIO()
+            printer.print_entries(clean_transactions, file=output_content)
+            beancount_content = output_content.getvalue()
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -119,8 +143,16 @@ async def export_beancount(request: ExportBeancountRequest):
                 detail=f"Failed to write output file: {e}"
             )
         
+        # Convert Beancount transactions back to API format for summary generation (temporary)
+        # TODO: Update generate_export_summary to work with Beancount objects directly
+        from core.beancount_converter import beancount_to_api_transaction
+        api_transactions_for_summary = [
+            beancount_to_api_transaction(bc_txn) 
+            for bc_txn in beancount_transactions_to_export
+        ]
+        
         # Generate export summary
-        summary_data = generate_export_summary(transactions_to_export)
+        summary_data = generate_export_summary(api_transactions_for_summary)
         export_summary = ExportSummary(
             total_amount=summary_data['total_amount'],
             currency=summary_data['currency'],
@@ -128,11 +160,19 @@ async def export_beancount(request: ExportBeancountRequest):
             date_range=summary_data['date_range']
         )
         
-        # Generate preview
-        preview = preview_beancount_output(transactions_to_export, max_transactions=5)
+        # Generate preview using native Beancount printer
+        from beancount.parser import printer
+        from core.beancount_converter import clean_internal_metadata_for_output
+        import io
+        
+        preview_transactions = beancount_transactions_to_export[:5]  # First 5 for preview
+        clean_preview_transactions = clean_internal_metadata_for_output(preview_transactions)
+        preview_content = io.StringIO()
+        printer.print_entries(clean_preview_transactions, file=preview_content)
+        preview = preview_content.getvalue()
         
         return ExportBeancountResponse(
-            transactions_exported=len(transactions_to_export),
+            transactions_exported=len(beancount_transactions_to_export),
             file_path=request.output_file_path,
             summary=export_summary,
             beancount_preview=preview
@@ -162,44 +202,66 @@ async def preview_export(session_id: str, max_transactions: int = 5):
         session_manager = get_session_manager()
         session = session_manager.get_session(session_id)
         
-        # Filter exportable transactions
-        transactions_to_export = []
+        # Filter Beancount transactions for preview (use same logic as export)
+        beancount_transactions_to_export = []
         
-        for transaction in session.transactions:
-            # Skip transactions marked for skipping
-            if transaction.narration and "SKIP:" in transaction.narration:
-                continue
+        # Use Beancount transactions if available, fall back to API transactions for backward compatibility
+        if hasattr(session, 'beancount_transactions') and session.beancount_transactions:
+            for bc_transaction in session.beancount_transactions:
+                # Skip transactions marked for skipping
+                if bc_transaction.narration and "SKIP:" in bc_transaction.narration:
+                    continue
+                
+                beancount_transactions_to_export.append(bc_transaction)
+        else:
+            # Backward compatibility: convert from API transactions
+            from core.beancount_converter import api_transaction_to_beancount
             
-            # Skip invalid transactions
-            transaction_errors = validate_transaction(transaction)
-            if transaction_errors:
-                continue
-            
-            # Ensure transaction has categorized accounts
-            if not transaction.categorized_accounts:
-                from api.models.transaction import Posting
-                unknown_posting = Posting(
-                    account="Expenses:Unknown",
-                    amount=abs(transaction.amount),
-                    currency=transaction.currency
-                )
-                transaction.categorized_accounts = [unknown_posting]
-            
-            transactions_to_export.append(transaction)
+            for transaction in session.transactions:
+                # Skip transactions marked for skipping
+                if transaction.narration and "SKIP:" in transaction.narration:
+                    continue
+                
+                # Skip invalid transactions
+                transaction_errors = validate_transaction(transaction)
+                if transaction_errors:
+                    continue
+                
+                # Ensure transaction has categorized accounts
+                if not transaction.categorized_accounts:
+                    from api.models.transaction import Posting
+                    unknown_posting = Posting(
+                        account="Expenses:Unknown",
+                        amount=abs(transaction.amount),
+                        currency=transaction.currency
+                    )
+                    transaction.categorized_accounts = [unknown_posting]
+                
+                # Convert to Beancount format
+                bc_transaction = api_transaction_to_beancount(transaction, transaction.account)
+                beancount_transactions_to_export.append(bc_transaction)
         
-        if not transactions_to_export:
+        if not beancount_transactions_to_export:
             return {
                 "preview": "",
                 "message": "No valid transactions to export"
             }
         
-        # Generate preview
-        preview = preview_beancount_output(transactions_to_export, max_transactions)
+        # Generate preview using native Beancount printer
+        from beancount.parser import printer
+        from core.beancount_converter import clean_internal_metadata_for_output
+        import io
+        
+        preview_transactions = beancount_transactions_to_export[:max_transactions]
+        clean_preview_transactions = clean_internal_metadata_for_output(preview_transactions)
+        preview_content = io.StringIO()
+        printer.print_entries(clean_preview_transactions, file=preview_content)
+        preview = preview_content.getvalue()
         
         return {
             "preview": preview,
-            "total_transactions": len(transactions_to_export),
-            "preview_count": min(len(transactions_to_export), max_transactions)
+            "total_transactions": len(beancount_transactions_to_export),
+            "preview_count": min(len(beancount_transactions_to_export), max_transactions)
         }
     
     except Exception as e:

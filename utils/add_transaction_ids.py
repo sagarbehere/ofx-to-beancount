@@ -6,9 +6,10 @@ This utility script processes existing Beancount files and adds SHA256-based
 transaction_id metadata to all transaction directives that don't already have them.
 
 The transaction_id is generated using the same logic as the main OFX converter:
-SHA256 hash of: "{date}|{payee}|{amount} {currency}|{account}"
+SHA256 hash of: "{date}|{payee}|{narration}|{amount} {currency}|{account}"
 
 Account selection priority:
+0. If source_account metadata exists (from ofx_converter.py), use that account
 1. Assets or Liabilities accounts (first found)
 2. Income accounts (first found) 
 3. First posting account
@@ -39,7 +40,10 @@ import io
 # Import our reusable transaction ID generator
 # Add parent directory to path to access core module
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.transaction_id_generator import generate_single_transaction_id, TransactionIdValidationError
+from core.transaction_id_generator import (
+    add_transaction_id_to_beancount_transaction,
+    TransactionIdValidationError
+)
 
 
 # Exit codes for different error conditions
@@ -73,9 +77,10 @@ Safety Features:
   - Provides detailed processing statistics
 
 The transaction_id is generated using SHA256 hash of:
-  "{date}|{payee}|{amount} {currency}|{account}"
+  "{date}|{payee}|{narration}|{amount} {currency}|{account}"
 
 Account selection priority:
+  0. If source_account metadata exists (from ofx_converter.py), use that account
   1. Assets or Liabilities accounts (first found)
   2. Income accounts (first found)
   3. First posting account
@@ -256,7 +261,8 @@ def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = 
                         if verbose:
                             print(f"   ✅ Added ID to: {entry.date} {entry.payee or '(no payee)'}")
                 else:
-                    if has_transaction_id(entry):
+                    # Only count as "already had IDs" if we're NOT force recalculating
+                    if not force_recalculate and has_transaction_id(entry):
                         stats['transactions_with_existing_ids'] += 1
                         if verbose:
                             print(f"   ⏭️  Skipped (has ID): {entry.date} {entry.payee or '(no payee)'}")
@@ -317,32 +323,43 @@ def process_transaction(txn: data.Transaction, verbose: bool = False, force_reca
         return txn, False, False
     
     try:
-        # Select account and amount using priority logic
-        account, amount_currency = select_account_for_hash(txn)
-        
-        # Generate transaction ID using strict validation
-        # This will raise TransactionIdValidationError if any critical field is invalid
-        transaction_id = generate_single_transaction_id(
-            date=txn.date.strftime('%Y-%m-%d'),
-            payee=txn.payee or "",
-            amount=amount_currency,
-            mapped_account=account,
-            narration=txn.narration or "",
+        # Use the centralized transaction ID generation
+        modified_txn = add_transaction_id_to_beancount_transaction(
+            transaction=txn,
+            force_recalculate=force_recalculate,
             strict_validation=True
         )
         
-        # Add or replace transaction_id metadata
-        if force_recalculate and had_existing_id:
-            # Remove existing transaction_id before adding new one
-            modified_txn = add_transaction_id_metadata(txn, transaction_id, replace=True)
-            if verbose:
-                print(f"      Recalculated ID: {transaction_id[:16]}... for account: {account}")
-        else:
-            modified_txn = add_transaction_id_metadata(txn, transaction_id)
-            if verbose:
-                print(f"      Generated ID: {transaction_id[:16]}... for account: {account}")
+        # Check if transaction was actually modified
+        was_modified = modified_txn != txn
         
-        return modified_txn, True, had_existing_id
+        # When force_recalculate is True, we should count it as recalculated even if ID is same
+        if force_recalculate and had_existing_id:
+            was_recalculated_forced = True
+        else:
+            was_recalculated_forced = False
+        
+        if verbose and not was_modified and force_recalculate:
+            print(f"      Transaction unchanged - same ID regenerated")
+        elif verbose and not was_modified:
+            print(f"      Transaction unchanged - likely already has same ID")
+        
+        if was_modified and verbose:
+            # Extract account that was used for ID generation
+            source_account = None
+            if modified_txn.meta and 'source_account' in modified_txn.meta:
+                source_account = modified_txn.meta['source_account']
+            
+            transaction_id = modified_txn.meta.get('transaction_id', 'unknown')
+            
+            if force_recalculate and had_existing_id:
+                print(f"      Recalculated ID: {transaction_id[:16]}... for account: {source_account}")
+            else:
+                print(f"      Generated ID: {transaction_id[:16]}... for account: {source_account}")
+        
+        # Return was_recalculated as True if transaction had an existing ID and was modified OR force recalculated
+        was_recalculated = (had_existing_id and was_modified) or was_recalculated_forced
+        return modified_txn, was_modified or was_recalculated_forced, was_recalculated
         
     except TransactionIdValidationError as e:
         # Convert to ProcessingError with file location context
@@ -362,56 +379,11 @@ def process_transaction(txn: data.Transaction, verbose: bool = False, force_reca
         
         raise ProcessingError(detailed_message)
     except Exception as e:
+        print(f"      Error: {e}")
         if verbose:
-            print(f"      Error: {e}")
+            import traceback
+            traceback.print_exc()
         return txn, False, False
-
-
-def select_account_for_hash(txn: data.Transaction) -> Tuple[str, str]:
-    """
-    Select account and amount using priority logic.
-    
-    Priority order:
-    1. Assets or Liabilities accounts (first found)
-    2. Income accounts (first found) 
-    3. First posting account
-    
-    Args:
-        txn: Beancount transaction
-        
-    Returns:
-        Tuple of (account_name, amount_with_currency)
-        
-    Raises:
-        ProcessingError: If transaction has no postings
-    """
-    if not txn.postings:
-        raise ProcessingError("Transaction has no postings")
-    
-    # Priority 1: Assets or Liabilities accounts
-    for posting in txn.postings:
-        if posting.account.startswith(('Assets:', 'Liabilities:')):
-            if posting.units:
-                amount_str = f"{posting.units.number} {posting.units.currency}"
-                return posting.account, amount_str
-    
-    # Priority 2: Income accounts  
-    for posting in txn.postings:
-        if posting.account.startswith('Income:'):
-            if posting.units:
-                amount_str = f"{posting.units.number} {posting.units.currency}"
-                return posting.account, amount_str
-    
-    # Priority 3: First posting with units
-    for posting in txn.postings:
-        if posting.units:
-            amount_str = f"{posting.units.number} {posting.units.currency}"
-            return posting.account, amount_str
-    
-    # Fallback: first posting even without units
-    first_posting = txn.postings[0]
-    amount_str = "0 USD"  # Default if no units
-    return first_posting.account, amount_str
 
 
 def has_transaction_id(txn: data.Transaction) -> bool:
@@ -419,34 +391,6 @@ def has_transaction_id(txn: data.Transaction) -> bool:
     return (hasattr(txn, 'meta') and 
             txn.meta is not None and 
             'transaction_id' in txn.meta)
-
-
-def add_transaction_id_metadata(txn: data.Transaction, transaction_id: str, replace: bool = False) -> data.Transaction:
-    """
-    Add transaction_id as first metadata entry, preserving existing metadata.
-    
-    Args:
-        txn: Original transaction
-        transaction_id: Generated transaction ID
-        replace: If True, replace existing transaction_id if present
-        
-    Returns:
-        New transaction with transaction_id metadata added
-    """
-    # Start with existing metadata or empty dict
-    new_meta = txn.meta.copy() if txn.meta else {}
-    
-    # If replacing, remove existing transaction_id first
-    if replace and 'transaction_id' in new_meta:
-        del new_meta['transaction_id']
-    
-    # Add transaction_id at beginning (will appear first when printed)
-    # Create new dict with transaction_id first, then existing metadata
-    updated_meta = {'transaction_id': transaction_id}
-    updated_meta.update(new_meta)
-    
-    # Create new transaction with updated metadata
-    return txn._replace(meta=updated_meta)
 
 
 def print_summary(stats: Dict[str, int], input_path: Path, output_path: Path, dry_run: bool) -> None:
@@ -476,7 +420,9 @@ def print_summary(stats: Dict[str, int], input_path: Path, output_path: Path, dr
     if stats['transaction_entries'] > 0:
         processable = stats['transaction_entries'] - stats['transactions_with_existing_ids']
         if processable > 0:
-            success_rate = (stats['transactions_processed'] / processable) * 100
+            # Include both newly processed and recalculated transactions in success rate
+            successful = stats['transactions_processed'] + stats['transactions_recalculated']
+            success_rate = (successful / processable) * 100
     
     print(f"\nSuccess rate: {success_rate:.1f}% of processable transactions")
     

@@ -1,9 +1,13 @@
 # Transaction ID Implementation Specification
 
-**Version:** 2.1  
+**Version:** 3.0  
 **Date:** 2025-01-13  
 **Status:** Implemented  
-**Breaking Changes:** Yes (see Migration Guide)
+**Breaking Changes:** Yes (see Migration Guide v2.0)
+
+## Important: Major Architecture Update
+
+This document describes the **new Beancount-based transaction ID system** that ensures perfect consistency across all tools and codebases. For migration guidance, see `transaction_id_update_guide.md`.
 
 ## Table of Contents
 
@@ -32,18 +36,44 @@ The Transaction ID system provides a robust, deterministic method for uniquely i
 
 ### Key Benefits
 
+- **Perfect Consistency**: All tools using Beancount objects generate identical transaction IDs
 - **Deterministic**: Same transaction data always produces same ID
-- **Collision-Resistant**: Uses SHA256 cryptographic hashing
-- **Self-Contained**: No external dependencies beyond Python standard library
-- **Backward Compatible**: Works with existing Beancount workflows
-- **Human Readable**: IDs are visible in Beancount metadata, not embedded in narration
+- **Collision-Resistant**: Uses SHA256 cryptographic hashing  
+- **Centralized Logic**: Single source of truth for transaction ID generation
+- **Self-Contained**: Encapsulates all complexity - just pass in Beancount transaction objects
+- **Output Consistency**: Both main converter and utility scripts use identical Beancount printing
 
 ## Conceptual Design
 
+### New Architecture (v3.0)
+
+#### Core Philosophy: Beancount-Centric Processing
+The system now uses standard `beancount.core.data.Transaction` objects as the single source of truth for transaction ID generation. This ensures perfect consistency across all tools and codebases.
+
+#### Single Entry Point
+```python
+from core.transaction_id_generator import add_transaction_id_to_beancount_transaction
+
+# All complexity encapsulated - just pass Beancount transaction
+transaction_with_id = add_transaction_id_to_beancount_transaction(beancount_txn)
+```
+
+#### Automatic Account Selection
+The system automatically selects the appropriate account using standardized priority logic:
+1. **Source Account Metadata** (if present) - ensures consistency with original processing
+2. **Assets/Liabilities accounts** (first found in postings)  
+3. **Income accounts** (first found in postings)
+4. **First posting account** (fallback)
+
+This eliminates manual account selection and ensures all tools use identical logic.
+
 ### Design Principles
 
-#### 1. Deterministic Generation
-Transaction IDs are generated using immutable transaction fields, ensuring the same transaction data always produces the same ID regardless of when or where it's processed.
+#### 1. Perfect Consistency
+All codebases working with the same Beancount transaction data will generate **identical transaction IDs**. This is achieved by:
+- Using standard Beancount objects as input
+- Centralizing all account selection logic
+- Preserving source account information in metadata
 
 #### 2. Collision Handling
 The system handles the rare case of hash collisions by appending suffixes (`-2`, `-3`, etc.) to ensure uniqueness within a processing session.
@@ -120,35 +150,58 @@ The system maintains two types of metadata:
 ```beancount
 2024-01-15 * "GROCERY STORE" "Weekly shopping"
   transaction_id: "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890"
+  source_account: "Liabilities:CreditCard"
   ofx_id: "20240115001234567890"
   Expenses:Food:Groceries           85.50 USD
   Liabilities:CreditCard           -85.50 USD
 ```
 
+**Key Metadata Fields:**
+- `transaction_id`: SHA256 hash for unique identification
+- `source_account`: Original source account (preserves OFX origin for consistency)
+- `ofx_id`: Original OFX transaction ID (when available)
+
 ## Technical Implementation
 
-### Core Component: TransactionIdGenerator
+### Core Component: Transaction ID Generator v3.0
 
 **File**: `core/transaction_id_generator.py`
 
-The `TransactionIdGenerator` class is designed as a self-contained, reusable component with zero external dependencies beyond Python's standard library.
+The transaction ID generator has been completely redesigned around standard Beancount objects to ensure perfect consistency across all tools.
 
-#### Key Features
+#### Primary API: Beancount Transaction Processing
 
-1. **Self-Contained Design**
-   - No framework dependencies (FastAPI, Beancount, etc.)
-   - Only uses standard library modules (`hashlib`, `secrets`, `typing`)
-   - Easily portable to other projects
+**Main Function:**
+```python
+def add_transaction_id_to_beancount_transaction(
+    transaction: BeancountTransaction,
+    force_recalculate: bool = False,
+    strict_validation: bool = True,
+    id_generator: Optional[TransactionIdGenerator] = None
+) -> BeancountTransaction
+```
 
-2. **Flexible Input Handling**
-   - Accepts strings, Decimals, or floats for amounts
-   - Gracefully handles None/empty values
-   - Normalizes inputs for consistent hashing
+**Key Features:**
 
-3. **State Management**
-   - Tracks used IDs to prevent duplicates within session
-   - Maintains collision counters for suffix generation
-   - Provides statistics and debugging information
+1. **Beancount-Native Design**
+   - Accepts standard `beancount.core.data.Transaction` objects
+   - Automatically extracts all required fields from transaction
+   - Returns new transaction object with `transaction_id` metadata
+
+2. **Centralized Account Selection**
+   - Eliminates manual account selection by callers
+   - Uses standardized priority logic for all codebases
+   - Preserves `source_account` metadata for consistency
+
+3. **Perfect Consistency**
+   - Same Beancount transaction data → Same transaction ID
+   - All tools using this API get identical results
+   - No risk of different account selection strategies
+
+4. **Collision Tracking**
+   - Optional shared `TransactionIdGenerator` for batch processing
+   - Handles hash collisions with deterministic suffixes
+   - Maintains session-wide uniqueness
 
 #### Class Interface
 
@@ -284,25 +337,57 @@ COLLISION_SUFFIX_FORMAT = "-{counter}"
 
 ## Integration with Main Program
 
-### Data Model Updates
+### New Architecture: Clean API/Core Separation
 
-#### Transaction Model Changes
+The system now employs a clean separation between API communication and core transaction processing:
 
-**File**: `api/models/transaction.py`
+#### API Layer (JSON Communication)
+- **Purpose**: Lightweight communication between CLI and server
+- **Format**: Generic JSON-based models (`TransactionAPI`, `PostingAPI`)
+- **Benefits**: Framework-agnostic, no Beancount dependency in CLI client
 
+#### Server Core Layer (Beancount Processing)
+- **Purpose**: All transaction ID generation and core processing
+- **Format**: Standard `beancount.core.data.Transaction` objects
+- **Benefits**: Perfect consistency, centralized logic, native Beancount formatting
+
+### Processing Flow
+
+#### 1. Session Initialization
+```
+CLI → OFX File Path → Server
+Server → Parse OFX → Custom Transaction Objects → Store in Session
+```
+
+#### 2. Transaction Review  
+```
+Server → Convert to TransactionAPI → JSON → CLI
+CLI → User Review/Edit → JSON → Server
+```
+
+#### 3. Transaction ID Generation (New)
 ```python
-@dataclass  
-class Transaction:
-    """Represents a financial transaction with all associated data."""
-    date: str  # ISO format YYYY-MM-DD
-    payee: str
-    memo: str
-    amount: Decimal
-    currency: str
-    account: str  # Source account (from OFX)
-    categorized_accounts: List[Posting]  # Target accounts
-    narration: str  # User-entered note (clean, without ID)
-    transaction_id: str  # NEW: SHA256 hash of immutable fields
+# Server converts API format to Beancount objects
+from core.beancount_converter import create_beancount_transaction_from_api
+
+for api_transaction in session.transactions:
+    # Convert to Beancount format
+    bc_transaction = create_beancount_transaction_from_api(
+        api_txn=api_transaction,
+        source_account=api_transaction.account
+    )
+    
+    # Store Beancount objects as canonical format
+    session.beancount_transactions.append(bc_transaction)
+```
+
+#### 4. Output Generation (New)
+```python
+# Use native Beancount printer (same as add_transaction_ids.py)
+from beancount.parser import printer
+
+printer.print_entries(session.beancount_transactions, file=output_file)
+```
     ofx_id: Optional[str]  # NEW: Original OFX transaction ID (when available)
     is_split: bool
     # DEPRECATED: Use ofx_id instead
@@ -495,19 +580,43 @@ def _check_duplicate_match(new_txn: Transaction, existing_txn: Transaction) -> D
 
 **File**: `utils/add_transaction_ids.py`
 
-The utility script provides a way to retroactively add transaction_id metadata to existing Beancount files that were created before the transaction ID system was implemented.
+The utility script provides a way to retroactively add transaction_id metadata to existing Beancount files. **Crucially, it now uses the same Beancount-based processing as the main OFX converter**, ensuring perfect consistency.
 
 #### Key Design Principles
 
-1. **Safety First**: Never overwrites existing files without explicit force flag
-2. **Preserve Structure**: Maintains original file formatting and structure  
-3. **Smart Processing**: Skips transactions that already have transaction_id metadata
-4. **Comprehensive Reporting**: Provides detailed statistics and error reporting
-5. **Code Reuse**: Leverages the same TransactionIdGenerator as the main program
+1. **Perfect Consistency**: Uses identical `add_transaction_id_to_beancount_transaction()` function
+2. **Native Beancount Processing**: Works directly with `beancount.core.data.Transaction` objects
+3. **Identical Output Format**: Uses same `printer.print_entries()` as main converter
+4. **Source Account Preservation**: Reads and respects `source_account` metadata when present
+5. **Safety First**: Never overwrites existing files without explicit force flag
 
-### Account Selection Priority
+#### Processing Flow
+```python
+# 1. Parse Beancount file (native objects)
+entries, _, _ = loader.load_file(input_file)
 
-The utility script uses a specific priority system to select which account and amount to use for transaction ID generation:
+# 2. Process each transaction using centralized logic  
+for entry in entries:
+    if isinstance(entry, data.Transaction):
+        # Same function as main converter!
+        updated_txn = add_transaction_id_to_beancount_transaction(
+            transaction=entry,
+            force_recalculate=force_recalculate
+        )
+
+# 3. Output using native Beancount printer (identical to main converter)  
+printer.print_entries(processed_entries, file=output_file)
+```
+
+### Perfect Consistency Guarantee
+
+Both the main OFX converter and the utility script now:
+- Use identical Beancount transaction objects
+- Use identical transaction ID generation logic  
+- Use identical account selection priorities
+- Use identical output formatting
+
+This **guarantees** that `add_transaction_ids.py --force-recalculate` produces identical transaction IDs and formatting as the original OFX converter output.
 
 ```python
 def select_account_for_hash(txn: data.Transaction) -> Tuple[str, str]:
@@ -2235,243 +2344,37 @@ logger.debug(f"Hash input: {hash_input}")
 
 ## Breaking Changes and Migration Guide
 
-### Version 2.1 Changes (January 2025)
+### Version 3.0 Changes (January 2025)
 
-**IMPORTANT**: Version 2.1 of `transaction_id_generator.py` introduces breaking changes that improve transaction ID uniqueness and handle edge cases better. All projects using this module must update their integration code.
+**MAJOR BREAKING CHANGES**: Version 3.0 completely restructures the transaction ID generation system around standard Beancount objects. This ensures perfect consistency across all tools but requires migration.
 
 #### Summary of Changes
 
-1. **New Exception Class**: Added `TransactionIdValidationError` for validation failures
-2. **Strict Validation Mode**: Added `strict_validation` parameter to enforce data quality  
-3. **Enhanced Field Validation**: All critical fields are now validated in strict mode
-4. **Narration Field Added**: Transaction hash now includes narration field for better uniqueness
-5. **Flexible Content Validation**: Either payee OR narration must be non-empty (not both)
-6. **Backwards Compatibility**: Legacy behavior preserved when `strict_validation=False`
+1. **New Primary API**: `add_transaction_id_to_beancount_transaction()` replaces manual field extraction
+2. **Beancount-Centric**: All processing uses `beancount.core.data.Transaction` objects
+3. **Centralized Account Selection**: Eliminates manual account selection by callers
+4. **Perfect Consistency**: Identical results across all tools using the same Beancount objects
+5. **Output Consistency**: Both main converter and utility use native Beancount printer
 
-#### New Validation Requirements
+#### Required Actions
 
-When `strict_validation=True`, the following fields are strictly validated:
+**All external codebases using `transaction_id_generator.py` must migrate to the new API.**
 
-| Field | Validation Rules | Examples |
-|-------|------------------|----------|
-| `date` | Must be valid YYYY-MM-DD format | ✅ "2024-01-15"<br/>❌ "2024-13-45", "invalid-date", "" |
-| `payee` | Must be non-empty OR narration must be non-empty | ✅ "GROCERY STORE"<br/>✅ "" (if narration is non-empty)<br/>❌ "" (if narration is also empty) |
-| `narration` | Must be non-empty OR payee must be non-empty | ✅ "Weekly shopping"<br/>✅ "" (if payee is non-empty)<br/>❌ "" (if payee is also empty) |
-| `amount` | Must contain valid numeric value | ✅ "-85.50", "-85.50 USD"<br/>❌ "not-a-number", "", "USD" |
-| `mapped_account` | Must be non-empty string | ✅ "Liabilities:CreditCard"<br/>❌ "", "   ", None |
+See `transaction_id_update_guide.md` for complete migration instructions.
 
-#### Migration Instructions for Projects
+#### Legacy Support
 
-##### 1. Update Import Statements
+Legacy functions remain available but are deprecated:
+- `generate_single_transaction_id()` - Use new Beancount-based API instead
+- Manual account selection logic - Now handled automatically
 
-**Before (Version 1.x):**
-```python
-from core.transaction_id_generator import generate_single_transaction_id, TransactionIdGenerator
-```
+#### Benefits of Migration
 
-**After (Version 2.0):**
-```python
-from core.transaction_id_generator import (
-    generate_single_transaction_id, 
-    TransactionIdGenerator, 
-    TransactionIdValidationError  # NEW: Import the exception class
-)
-```
-
-##### 2. Update Function Calls
-
-**Before (Version 1.x):**
-```python
-# Old way - no validation parameter, no narration
-transaction_id = generate_single_transaction_id(
-    date=txn_date,
-    payee=txn_payee,
-    amount=txn_amount,
-    mapped_account=account_name
-)
-```
-
-**After (Version 2.1) - Option A: Enable Strict Validation (Recommended)**
-```python
-# New way - with narration and strict validation enabled
-try:
-    transaction_id = generate_single_transaction_id(
-        date=txn_date,
-        payee=txn_payee,
-        amount=txn_amount,
-        mapped_account=account_name,
-        narration=txn_narration,  # NEW: Include narration
-        strict_validation=True    # NEW: Enable validation
-    )
-except TransactionIdValidationError as e:
-    # Handle validation error with context-specific message
-    raise YourProjectException(f"Transaction validation failed at {location}: {e}")
-```
-
-**After (Version 2.1) - Option B: Maintain Legacy Behavior**
-```python
-# Maintains old behavior for gradual migration (note: still need to pass narration for API compatibility)
-transaction_id = generate_single_transaction_id(
-    date=txn_date,
-    payee=txn_payee,
-    amount=txn_amount,
-    mapped_account=account_name,
-    narration="",             # NEW: Pass empty narration for backwards compatibility
-    strict_validation=False   # Keep legacy behavior
-)
-```
-
-##### 3. Update Generator Class Usage
-
-**Before (Version 1.x):**
-```python
-generator = TransactionIdGenerator()
-txn_id = generator.generate_id(date, payee, amount, account)
-```
-
-**After (Version 2.1):**
-```python
-generator = TransactionIdGenerator()
-try:
-    txn_id = generator.generate_id(
-        date, payee, amount, account, 
-        narration=narration,        # NEW: Add narration parameter
-        strict_validation=True      # NEW: Add validation parameter
-    )
-except TransactionIdValidationError as e:
-    # Handle validation error appropriately for your project
-    handle_validation_error(e, transaction_context)
-```
-
-#### Error Handling Patterns
-
-##### Pattern 1: CLI Applications
-```python
-def process_transaction_for_cli(txn_data, file_path, line_number):
-    try:
-        return generate_single_transaction_id(
-            date=txn_data.date,
-            payee=txn_data.payee,
-            amount=f"{txn_data.amount} {txn_data.currency}",
-            mapped_account=txn_data.account,
-            narration=txn_data.narration,  # NEW: Include narration
-            strict_validation=True
-        )
-    except TransactionIdValidationError as e:
-        # Provide file context for CLI users
-        print(f"❌ ERROR: {file_path}:{line_number} - {e}")
-        print("Please fix the transaction data and try again.")
-        sys.exit(1)
-```
-
-##### Pattern 2: API Applications
-```python
-def process_transaction_for_api(txn_data):
-    try:
-        return generate_single_transaction_id(
-            date=txn_data.date,
-            payee=txn_data.payee,
-            amount=str(txn_data.amount),
-            mapped_account=txn_data.account,
-            narration=txn_data.narration,  # NEW: Include narration
-            strict_validation=True
-        )
-    except TransactionIdValidationError as e:
-        # Convert to HTTP error for API clients
-        raise HTTPException(
-            status_code=400,
-            detail=f"Transaction validation failed: {e}. "
-                   f"Transaction: {txn_data.date} '{txn_data.payee}' {txn_data.amount}"
-        )
-```
-
-##### Pattern 3: Library/Framework Integration
-```python
-class TransactionProcessor:
-    def __init__(self, strict_mode=True):
-        self.strict_mode = strict_mode
-        self.generator = TransactionIdGenerator()
-    
-    def process_transaction(self, transaction):
-        try:
-            transaction.id = self.generator.generate_id(
-                date=transaction.date,
-                payee=transaction.payee,
-                amount=transaction.amount,
-                mapped_account=transaction.account,
-                narration=transaction.narration,  # NEW: Include narration
-                strict_validation=self.strict_mode
-            )
-            return transaction
-        except TransactionIdValidationError as e:
-            if self.strict_mode:
-                # Strict mode: fail fast with detailed error
-                raise ProcessingError(f"Invalid transaction data: {e}")
-            else:
-                # Fallback mode: log warning and continue
-                logger.warning(f"Transaction validation failed: {e}")
-                return self._handle_invalid_transaction(transaction)
-```
-
-#### Testing Your Migration
-
-Create test cases to verify your migration:
-
-```python
-def test_validation_migration():
-    """Test that validation errors are properly handled."""
-    
-    # Test 1: Valid data should work
-    valid_id = generate_single_transaction_id(
-        "2024-01-15", "STORE", "-100.00", "Assets:Checking", "Purchase",
-        strict_validation=True
-    )
-    assert len(valid_id) == 64
-    
-    # Test 2: Invalid data should raise TransactionIdValidationError (both payee and narration empty)
-    with pytest.raises(TransactionIdValidationError):
-        generate_single_transaction_id(
-            "2024-01-15", "", "-100.00", "Assets:Checking", "",  # Both payee and narration empty
-            strict_validation=True
-        )
-    
-    # Test 3: Valid data with empty payee but non-empty narration should work
-    valid_id_narration = generate_single_transaction_id(
-        "2024-01-15", "", "-100.00", "Assets:Checking", "Auto-generated transaction",
-        strict_validation=True
-    )
-    assert len(valid_id_narration) == 64
-    
-    # Test 4: Backwards compatibility should work
-    legacy_id = generate_single_transaction_id(
-        "2024-01-15", "", "-100.00", "Assets:Checking", "",  # Both empty
-        strict_validation=False  # Should not raise error
-    )
-    assert len(legacy_id) == 64
-```
-
-#### Migration Checklist
-
-- [ ] Update import statements to include `TransactionIdValidationError`
-- [ ] Add `narration` parameter to all `generate_id()` calls  
-- [ ] Add `strict_validation=True` parameter to all `generate_id()` calls
-- [ ] Wrap calls in try-catch blocks to handle `TransactionIdValidationError`
-- [ ] Implement project-specific error handling and user messaging
-- [ ] Add test cases for both valid and invalid transaction data
-- [ ] Test edge cases where payee is empty but narration is meaningful
-- [ ] Update documentation to reflect new validation requirements and narration field
-- [ ] Consider gradual rollout using `strict_validation=False` initially
-
-#### Recommended Migration Strategy
-
-1. **Phase 1**: Update imports and add narration parameter (empty string for compatibility) with `strict_validation=False`
-2. **Phase 2**: Add error handling code and test with `strict_validation=True` in development
-3. **Phase 3**: Update code to pass meaningful narration values where available
-4. **Phase 4**: Enable `strict_validation=True` in production with proper error handling
-5. **Phase 5**: Remove fallback logic and fully embrace strict validation
-
-This phased approach allows for gradual migration while maintaining system stability.
+1. **Perfect Consistency**: Identical transaction IDs across all tools
+2. **Simplified Integration**: No manual field extraction or account selection
+3. **Future-Proof**: Centralized logic benefits from improvements
+4. **Output Consistency**: Identical formatting using native Beancount printer
 
 ---
 
-This specification provides a comprehensive foundation for understanding and working with the transaction ID system. It serves as both documentation for current functionality and a roadmap for future enhancements.
+**For complete migration guidance and examples, see `dev-docs/transaction_id_update_guide.md`.**

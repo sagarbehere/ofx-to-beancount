@@ -10,7 +10,7 @@ Dependencies: Only standard library modules (hashlib, secrets, typing, datetime)
 
 import hashlib
 import secrets
-from typing import Dict, Set, Optional, Tuple, Union
+from typing import Dict, Set, Optional, Tuple, Union, List
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 
@@ -330,6 +330,310 @@ def validate_single_ofx_id(ofx_id: Optional[str]) -> Optional[str]:
     """
     generator = TransactionIdGenerator()
     return generator.validate_ofx_id(ofx_id)
+
+
+def select_account_for_transaction_id(postings: list, source_account_metadata: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Select the appropriate account and amount for transaction ID generation.
+    
+    This function implements the standard account selection logic used across all 
+    transaction ID generation to ensure consistency. It handles both OFX-originated 
+    transactions (which have source_account metadata) and manually created transactions.
+    
+    Priority order:
+    0. If source_account_metadata is provided, use that account
+    1. Assets or Liabilities accounts (first found)
+    2. Income accounts (first found)
+    3. First posting account
+    
+    Args:
+        postings: List of transaction postings (each must have 'account' and optionally 'units')
+        source_account_metadata: Optional source account from metadata (for OFX-originated transactions)
+        
+    Returns:
+        Tuple of (account_name, amount_with_currency)
+        
+    Raises:
+        ValueError: If postings list is empty or invalid
+        
+    Example:
+        >>> postings = [
+        ...     {'account': 'Expenses:Food', 'units': {'number': '50.00', 'currency': 'USD'}},
+        ...     {'account': 'Liabilities:CreditCard', 'units': {'number': '-50.00', 'currency': 'USD'}}
+        ... ]
+        >>> select_account_for_transaction_id(postings)
+        ('Liabilities:CreditCard', '-50.00 USD')
+        
+        >>> select_account_for_transaction_id(postings, 'Liabilities:CreditCard')
+        ('Liabilities:CreditCard', '-50.00 USD')
+    """
+    if not postings:
+        raise ValueError("Transaction has no postings")
+    
+    # Priority 0: Use source_account metadata if provided (ensures consistency)
+    if source_account_metadata:
+        for posting in postings:
+            account = posting.get('account') if isinstance(posting, dict) else getattr(posting, 'account', None)
+            if account == source_account_metadata:
+                # Extract amount
+                if isinstance(posting, dict):
+                    units = posting.get('units')
+                    if units:
+                        number = units.get('number', '0')
+                        currency = units.get('currency', 'USD')
+                        return source_account_metadata, f"{number} {currency}"
+                else:
+                    # Handle object-style postings (from Beancount parser)
+                    units = getattr(posting, 'units', None)
+                    if units:
+                        number = getattr(units, 'number', '0')
+                        currency = getattr(units, 'currency', 'USD')
+                        return source_account_metadata, f"{number} {currency}"
+    
+    # Helper function to extract account and amount from a posting
+    def extract_account_amount(posting):
+        if isinstance(posting, dict):
+            account = posting.get('account')
+            units = posting.get('units')
+            if units:
+                number = units.get('number', '0')
+                currency = units.get('currency', 'USD')
+                amount_str = f"{number} {currency}"
+            else:
+                amount_str = "0 USD"
+        else:
+            # Handle object-style postings
+            account = getattr(posting, 'account', None)
+            units = getattr(posting, 'units', None)
+            if units:
+                number = getattr(units, 'number', '0')
+                currency = getattr(units, 'currency', 'USD')
+                amount_str = f"{number} {currency}"
+            else:
+                amount_str = "0 USD"
+        return account, amount_str
+    
+    # Priority 1: Assets or Liabilities accounts
+    for posting in postings:
+        account, amount_str = extract_account_amount(posting)
+        if account and (account.startswith('Assets:') or account.startswith('Liabilities:')):
+            return account, amount_str
+    
+    # Priority 2: Income accounts
+    for posting in postings:
+        account, amount_str = extract_account_amount(posting)
+        if account and account.startswith('Income:'):
+            return account, amount_str
+    
+    # Priority 3: First posting with valid account
+    for posting in postings:
+        account, amount_str = extract_account_amount(posting)
+        if account:
+            return account, amount_str
+    
+    # This shouldn't happen if postings are valid
+    raise ValueError("No valid account found in postings")
+
+
+def add_transaction_id_to_beancount_transaction(transaction, 
+                                               force_recalculate: bool = False,
+                                               strict_validation: bool = True,
+                                               id_generator: Optional[TransactionIdGenerator] = None):
+    """
+    Add transaction_id metadata to a Beancount transaction object.
+    
+    This is the main entry point for transaction ID generation. It accepts a standard
+    beancount.core.data.Transaction object and returns a new transaction with 
+    transaction_id metadata added.
+    
+    This design ensures consistency across all code that uses the same Beancount library
+    version, as all transaction data is normalized to the standard Beancount format.
+    
+    Args:
+        transaction: beancount.core.data.Transaction object
+        force_recalculate: If True, recalculate even if transaction already has transaction_id
+        strict_validation: If True, enforce strict field validation
+        id_generator: Optional TransactionIdGenerator instance (for collision tracking)
+                     If not provided, a new instance will be created
+        
+    Returns:
+        New beancount.core.data.Transaction object with transaction_id metadata added
+        
+    Raises:
+        TransactionIdValidationError: If strict_validation=True and fields are invalid
+        ValueError: If transaction format is invalid
+        
+    Example:
+        >>> from beancount.core import data
+        >>> from beancount import loader
+        >>> 
+        >>> # Load transaction from Beancount file
+        >>> entries, _, _ = loader.load_file('transactions.beancount')
+        >>> txn = entries[0]  # First transaction
+        >>> 
+        >>> # Add transaction_id
+        >>> txn_with_id = add_transaction_id_to_beancount_transaction(txn)
+        >>> print(txn_with_id.meta['transaction_id'])
+        'a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890'
+        
+        # Force recalculation
+        >>> txn_recalc = add_transaction_id_to_beancount_transaction(
+        ...     txn_with_id, force_recalculate=True
+        ... )
+    """
+    # Validate input
+    if not hasattr(transaction, 'postings'):
+        raise ValueError("Input must be a beancount.core.data.Transaction object")
+    
+    # Create generator if not provided
+    if id_generator is None:
+        id_generator = TransactionIdGenerator()
+    
+    # Check if already has transaction_id in metadata
+    if (hasattr(transaction, 'meta') and transaction.meta and 
+        'transaction_id' in transaction.meta and not force_recalculate):
+        return transaction
+    
+    # Extract source_account from metadata if present
+    source_account_metadata = None
+    if hasattr(transaction, 'meta') and transaction.meta:
+        source_account_metadata = transaction.meta.get('source_account')
+    
+    # Select account using centralized logic
+    try:
+        account, amount_str = select_account_for_transaction_id(
+            postings=transaction.postings,
+            source_account_metadata=source_account_metadata
+        )
+    except ValueError as e:
+        if strict_validation:
+            raise TransactionIdValidationError(f"Account selection failed: {e}")
+        # Fallback for non-strict mode
+        account = "Unknown"
+        amount_str = "0 USD"
+    
+    # Extract date (Beancount date objects have strftime)
+    date_str = transaction.date.strftime('%Y-%m-%d')
+    
+    # Generate transaction ID
+    transaction_id = id_generator.generate_id(
+        date=date_str,
+        payee=transaction.payee or '',
+        amount=amount_str,
+        mapped_account=account,
+        narration=transaction.narration or '',
+        is_kept_duplicate=False,  # Could be parameterized in future
+        strict_validation=strict_validation
+    )
+    
+    # Prepare new metadata - only modify transaction_id, preserve everything else
+    if not hasattr(transaction, 'meta') or transaction.meta is None:
+        updated_meta = {'transaction_id': transaction_id}
+    else:
+        updated_meta = transaction.meta.copy()
+        updated_meta['transaction_id'] = transaction_id
+    
+    # Create new transaction with updated metadata using Beancount's _replace method
+    return transaction._replace(meta=updated_meta)
+
+
+def create_beancount_transaction_with_id(date_str: str,
+                                        payee: str,
+                                        narration: str,
+                                        postings: List,
+                                        source_account: str,
+                                        ofx_id: Optional[str] = None,
+                                        id_generator: Optional[TransactionIdGenerator] = None):
+    """
+    Create a new Beancount transaction with transaction_id metadata from scratch.
+    
+    This is a helper function for creating transactions from OFX data that ensures
+    the transaction_id is generated consistently with the standard process.
+    
+    Args:
+        date_str: Date in YYYY-MM-DD format
+        payee: Transaction payee
+        narration: Transaction narration/description
+        postings: List of Beancount Posting objects
+        source_account: The account that originated this transaction (from OFX)
+        ofx_id: Optional OFX transaction ID
+        id_generator: Optional TransactionIdGenerator instance
+        
+    Returns:
+        beancount.core.data.Transaction object with transaction_id metadata
+        
+    Example:
+        >>> from beancount.core.data import Posting, Amount
+        >>> from decimal import Decimal
+        >>> 
+        >>> postings = [
+        ...     Posting('Expenses:Food', Amount(Decimal('50.00'), 'USD'), None, None, None, None),
+        ...     Posting('Liabilities:CreditCard', Amount(Decimal('-50.00'), 'USD'), None, None, None, None)
+        ... ]
+        >>> 
+        >>> txn = create_beancount_transaction_with_id(
+        ...     date_str='2024-01-15',
+        ...     payee='GROCERY STORE',
+        ...     narration='Weekly shopping',
+        ...     postings=postings,
+        ...     source_account='Liabilities:CreditCard'
+        ... )
+        >>> print(txn.meta['transaction_id'])
+    """
+    # Import here to avoid circular dependencies
+    try:
+        from beancount.core.data import Transaction
+        from datetime import datetime
+    except ImportError:
+        raise ImportError("This function requires the beancount library")
+    
+    # Create generator if not provided
+    if id_generator is None:
+        id_generator = TransactionIdGenerator()
+    
+    # Select account and amount from the postings for transaction_id generation
+    account, amount_str = select_account_for_transaction_id(
+        postings=postings,
+        source_account_metadata=source_account
+    )
+    
+    # Generate transaction ID
+    transaction_id = id_generator.generate_id(
+        date=date_str,
+        payee=payee,
+        amount=amount_str,
+        mapped_account=account,
+        narration=narration,
+        strict_validation=True
+    )
+    
+    # Prepare metadata
+    meta = {'transaction_id': transaction_id}
+    
+    # Add source_account metadata for future consistency
+    if source_account:
+        meta['source_account'] = source_account
+    
+    # Add ofx_id if provided
+    if ofx_id and str(ofx_id).strip():
+        validated_ofx_id = TransactionIdGenerator().validate_ofx_id(ofx_id)
+        if validated_ofx_id:
+            meta['ofx_id'] = validated_ofx_id
+    
+    # Parse date
+    date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+    
+    # Create Beancount transaction
+    return Transaction(
+        meta=meta,
+        date=date_obj,
+        flag='*',  # Default flag
+        payee=payee,
+        narration=narration,
+        tags=frozenset(),
+        links=frozenset(),
+        postings=postings
+    )
 
 
 # Module-level constants for external use
