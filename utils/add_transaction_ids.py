@@ -64,11 +64,12 @@ def main():
 Examples:
   python utils/add_transaction_ids.py -i my_accounts.beancount -o my_accounts_with_ids.beancount
   python utils/add_transaction_ids.py --input ledger.beancount --output ledger_processed.beancount
+  python utils/add_transaction_ids.py -i ledger.beancount -o ledger_new.beancount --force-recalculate
 
 Safety Features:
-  - Never overwrites existing output files
+  - Never overwrites existing output files (unless --force-overwrite)
   - Preserves original file structure and formatting  
-  - Skips transactions that already have transaction_id metadata
+  - Skips transactions that already have transaction_id metadata (unless --force-recalculate)
   - Provides detailed processing statistics
 
 The transaction_id is generated using SHA256 hash of:
@@ -96,9 +97,15 @@ Account selection priority:
     )
     
     parser.add_argument(
-        '--force',
+        '--force-overwrite',
         action='store_true',
         help='Allow overwriting existing output file (use with caution!)'
+    )
+    
+    parser.add_argument(
+        '--force-recalculate',
+        action='store_true',
+        help='Remove and recalculate transaction_id for all transactions, even those that already have one'
     )
     
     parser.add_argument(
@@ -123,7 +130,7 @@ Account selection priority:
             print("🔍 DRY RUN MODE - No files will be modified")
             
         # Process the file
-        stats = process_beancount_file(args.input, args.output, args.dry_run, args.verbose)
+        stats = process_beancount_file(args.input, args.output, args.dry_run, args.verbose, args.force_recalculate)
         
         # Print summary
         print_summary(stats, args.input, args.output, args.dry_run)
@@ -156,12 +163,12 @@ def validate_arguments(args) -> None:
     except UnicodeDecodeError:
         handle_error("FILE_ERROR", f"Input file contains invalid UTF-8: {args.input}", EXIT_FILE_ERROR)
     
-    # Check output file safety (unless force or dry-run)
+    # Check output file safety (unless force-overwrite or dry-run)
     if not args.dry_run:
-        if args.output.exists() and not args.force:
+        if args.output.exists() and not args.force_overwrite:
             handle_error(
                 "FILE_ERROR", 
-                f"Output file already exists: {args.output}. Use --force to overwrite or choose a different output file.",
+                f"Output file already exists: {args.output}. Use --force-overwrite to overwrite or choose a different output file.",
                 EXIT_FILE_ERROR
             )
         
@@ -176,7 +183,7 @@ def validate_arguments(args) -> None:
                     pass
                 args.output.unlink()  # Remove test file
             else:
-                # File exists and --force was used, test if writable
+                # File exists and --force-overwrite was used, test if writable
                 with open(args.output, 'a', encoding='utf-8') as f:
                     pass
                     
@@ -186,7 +193,7 @@ def validate_arguments(args) -> None:
             handle_error("FILE_ERROR", f"Cannot create output file: {args.output} - {e}", EXIT_FILE_ERROR)
 
 
-def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = False, verbose: bool = False) -> Dict[str, int]:
+def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = False, verbose: bool = False, force_recalculate: bool = False) -> Dict[str, int]:
     """
     Main file processing logic returning statistics.
     
@@ -195,6 +202,7 @@ def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = 
         output_path: Path to output Beancount file
         dry_run: If True, don't write output file
         verbose: If True, show processing details
+        force_recalculate: If True, recalculate all transaction IDs even if they exist
         
     Returns:
         Dictionary with processing statistics
@@ -222,6 +230,7 @@ def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = 
         'transactions_processed': 0,
         'transactions_skipped': 0,
         'transactions_with_existing_ids': 0,
+        'transactions_recalculated': 0,
         'processing_errors': 0
     }
     
@@ -234,13 +243,18 @@ def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = 
             stats['transaction_entries'] += 1
             
             try:
-                processed_entry, was_modified = process_transaction(entry, verbose)
+                processed_entry, was_modified, was_recalculated = process_transaction(entry, verbose, force_recalculate)
                 processed_entries.append(processed_entry)
                 
                 if was_modified:
-                    stats['transactions_processed'] += 1
-                    if verbose:
-                        print(f"   ✅ Added ID to: {entry.date} {entry.payee or '(no payee)'}")
+                    if was_recalculated:
+                        stats['transactions_recalculated'] += 1
+                        if verbose:
+                            print(f"   🔄 Recalculated ID for: {entry.date} {entry.payee or '(no payee)'}")
+                    else:
+                        stats['transactions_processed'] += 1
+                        if verbose:
+                            print(f"   ✅ Added ID to: {entry.date} {entry.payee or '(no payee)'}")
                 else:
                     if has_transaction_id(entry):
                         stats['transactions_with_existing_ids'] += 1
@@ -283,20 +297,24 @@ def process_beancount_file(input_path: Path, output_path: Path, dry_run: bool = 
     return stats
 
 
-def process_transaction(txn: data.Transaction, verbose: bool = False) -> Tuple[data.Transaction, bool]:
+def process_transaction(txn: data.Transaction, verbose: bool = False, force_recalculate: bool = False) -> Tuple[data.Transaction, bool, bool]:
     """
-    Process individual transaction, return (modified_txn, was_modified).
+    Process individual transaction, return (modified_txn, was_modified, was_recalculated).
     
     Args:
         txn: Beancount transaction to process
         verbose: If True, show detailed processing info
+        force_recalculate: If True, recalculate even if transaction has ID
         
     Returns:
-        Tuple of (processed_transaction, was_modified_flag)
+        Tuple of (processed_transaction, was_modified_flag, was_recalculated_flag)
     """
-    # Skip if transaction already has transaction_id metadata
-    if has_transaction_id(txn):
-        return txn, False
+    # Check if transaction already has transaction_id metadata
+    had_existing_id = has_transaction_id(txn)
+    
+    # Skip if transaction already has transaction_id metadata (unless forcing recalculation)
+    if had_existing_id and not force_recalculate:
+        return txn, False, False
     
     try:
         # Select account and amount using priority logic
@@ -313,13 +331,18 @@ def process_transaction(txn: data.Transaction, verbose: bool = False) -> Tuple[d
             strict_validation=True
         )
         
-        # Add transaction_id metadata
-        modified_txn = add_transaction_id_metadata(txn, transaction_id)
+        # Add or replace transaction_id metadata
+        if force_recalculate and had_existing_id:
+            # Remove existing transaction_id before adding new one
+            modified_txn = add_transaction_id_metadata(txn, transaction_id, replace=True)
+            if verbose:
+                print(f"      Recalculated ID: {transaction_id[:16]}... for account: {account}")
+        else:
+            modified_txn = add_transaction_id_metadata(txn, transaction_id)
+            if verbose:
+                print(f"      Generated ID: {transaction_id[:16]}... for account: {account}")
         
-        if verbose:
-            print(f"      Generated ID: {transaction_id[:16]}... for account: {account}")
-        
-        return modified_txn, True
+        return modified_txn, True, had_existing_id
         
     except TransactionIdValidationError as e:
         # Convert to ProcessingError with file location context
@@ -341,7 +364,7 @@ def process_transaction(txn: data.Transaction, verbose: bool = False) -> Tuple[d
     except Exception as e:
         if verbose:
             print(f"      Error: {e}")
-        return txn, False
+        return txn, False, False
 
 
 def select_account_for_hash(txn: data.Transaction) -> Tuple[str, str]:
@@ -398,19 +421,24 @@ def has_transaction_id(txn: data.Transaction) -> bool:
             'transaction_id' in txn.meta)
 
 
-def add_transaction_id_metadata(txn: data.Transaction, transaction_id: str) -> data.Transaction:
+def add_transaction_id_metadata(txn: data.Transaction, transaction_id: str, replace: bool = False) -> data.Transaction:
     """
     Add transaction_id as first metadata entry, preserving existing metadata.
     
     Args:
         txn: Original transaction
         transaction_id: Generated transaction ID
+        replace: If True, replace existing transaction_id if present
         
     Returns:
         New transaction with transaction_id metadata added
     """
     # Start with existing metadata or empty dict
     new_meta = txn.meta.copy() if txn.meta else {}
+    
+    # If replacing, remove existing transaction_id first
+    if replace and 'transaction_id' in new_meta:
+        del new_meta['transaction_id']
     
     # Add transaction_id at beginning (will appear first when printed)
     # Create new dict with transaction_id first, then existing metadata
@@ -436,6 +464,8 @@ def print_summary(stats: Dict[str, int], input_path: Path, output_path: Path, dr
     print(f"\nTotal entries processed: {stats['total_entries']:,}")
     print(f"Transaction entries found: {stats['transaction_entries']:,}")
     print(f"Transactions with IDs added: {stats['transactions_processed']:,}")
+    if stats['transactions_recalculated'] > 0:
+        print(f"Transactions with IDs recalculated: {stats['transactions_recalculated']:,}")
     print(f"Transactions already had IDs: {stats['transactions_with_existing_ids']:,}")
     print(f"Transactions skipped (errors): {stats['transactions_skipped']:,}")
     
@@ -450,10 +480,18 @@ def print_summary(stats: Dict[str, int], input_path: Path, output_path: Path, dr
     
     print(f"\nSuccess rate: {success_rate:.1f}% of processable transactions")
     
-    if not dry_run and stats['transactions_processed'] > 0:
-        print(f"✅ Successfully added transaction_id metadata to {stats['transactions_processed']} transactions!")
+    total_modified = stats['transactions_processed'] + stats['transactions_recalculated']
+    
+    if not dry_run and total_modified > 0:
+        if stats['transactions_recalculated'] > 0:
+            print(f"✅ Successfully processed {total_modified} transactions ({stats['transactions_processed']} added, {stats['transactions_recalculated']} recalculated)!")
+        else:
+            print(f"✅ Successfully added transaction_id metadata to {stats['transactions_processed']} transactions!")
     elif dry_run:
-        print(f"🔍 DRY RUN: Would add transaction_id metadata to {stats['transactions_processed']} transactions")
+        if stats['transactions_recalculated'] > 0:
+            print(f"🔍 DRY RUN: Would process {total_modified} transactions ({stats['transactions_processed']} added, {stats['transactions_recalculated']} recalculated)")
+        else:
+            print(f"🔍 DRY RUN: Would add transaction_id metadata to {stats['transactions_processed']} transactions")
     elif stats['transactions_processed'] == 0 and stats['transactions_with_existing_ids'] > 0:
         print("ℹ️  All transactions already have transaction_id metadata - nothing to do!")
     else:

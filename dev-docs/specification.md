@@ -407,6 +407,38 @@ The system follows this precedence order for configuration values:
 - **Directives**: Focus only on transaction directives (ignore open/close/balance statements)
 - **Metadata**: Both transaction_id and ofx_id metadata automatically generated for all transactions
 
+### Transaction ID Utility Script
+- **Purpose**: A standalone utility (`utils/add_transaction_ids.py`) adds transaction_id metadata to existing Beancount files
+- **Use Cases**: 
+  - Add transaction IDs to legacy Beancount files that lack them
+  - Recalculate transaction IDs after manual edits to transactions
+  - Standardize transaction IDs across different Beancount files
+- **Features**:
+  - Preserves original file structure and formatting
+  - Skips transactions that already have transaction_id metadata (unless `--force-recalculate` is used)
+  - Uses same ID generation logic as main OFX converter
+  - Account selection priority for ID generation:
+    1. Assets or Liabilities accounts (first found)
+    2. Income accounts (first found)
+    3. First posting account
+- **Command Line Options**:
+  - `-i, --input`: Input Beancount file (required)
+  - `-o, --output`: Output Beancount file (required)
+  - `--force-overwrite`: Allow overwriting existing output file
+  - `--force-recalculate`: Remove and recalculate transaction_id for all transactions, even those that already have one
+  - `--dry-run`: Show what would be processed without writing output file
+  - `-v, --verbose`: Enable verbose output showing processing details
+- **Statistics Tracking**:
+  - Reports number of transactions with new IDs added
+  - Reports number of transactions with IDs recalculated (when using `--force-recalculate`)
+  - Reports number of transactions that already had IDs (skipped or recalculated)
+  - Shows processing errors if any transactions couldn't be processed
+- **Safety Features**:
+  - Never overwrites existing output files unless `--force-overwrite` is specified
+  - Validates input file readability and output file writability before processing
+  - Provides detailed error messages for data quality issues
+  - Maintains transaction_id as first metadata field for consistency
+
 ### Currency Handling
 - **Multi-currency transactions**: Flag with exclamation mark in Beancount format
 - **Flagging format**: `2024-01-15 ! "PAYEE" "memo"` (note: only one flag character allowed)
