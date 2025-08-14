@@ -38,9 +38,9 @@ from beancount.parser import printer
 import io
 
 # Import our reusable transaction ID generator
-# Add parent directory to path to access core module
+# Add parent directory to path to access shared-libs module
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.transaction_id_generator import (
+from shared_libs.transaction_id_generator import (
     add_transaction_id_to_beancount_transaction,
     TransactionIdValidationError
 )

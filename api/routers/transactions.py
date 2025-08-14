@@ -22,7 +22,7 @@ from api.services.validator import validate_transaction_updates
 from core.classifier import categorize_transaction, get_confidence_threshold
 from core.duplicate_detector import detect_duplicates
 from core.beancount_generator import validate_transaction
-from core.transaction_id_generator import TransactionIdGenerator, TransactionIdValidationError
+from shared_libs.transaction_id_generator import TransactionIdGenerator, TransactionIdValidationError
 
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -295,7 +295,7 @@ async def update_transactions_batch(request: TransactionUpdateBatchRequest):
         # Generate transaction IDs for all transactions after user updates
         # Use Beancount objects for consistent transaction_id generation
         from core.beancount_converter import create_beancount_transaction_from_api, beancount_to_api_transaction
-        from core.transaction_id_generator import TransactionIdGenerator
+        from shared_libs.transaction_id_generator import TransactionIdGenerator
         
         id_generator = TransactionIdGenerator()
         beancount_transactions = []

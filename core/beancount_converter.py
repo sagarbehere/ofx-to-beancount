@@ -234,7 +234,7 @@ def create_beancount_transaction_from_api(api_txn: Transaction, source_account: 
     Returns:
         Beancount transaction with transaction_id metadata
     """
-    from core.transaction_id_generator import add_transaction_id_to_beancount_transaction
+    from shared_libs.transaction_id_generator import add_transaction_id_to_beancount_transaction
     
     # Convert to Beancount format
     bc_txn = api_transaction_to_beancount(api_txn, source_account)
@@ -260,7 +260,7 @@ def batch_convert_api_to_beancount(api_transactions: List[Transaction], source_a
     Returns:
         List of Beancount transactions with transaction_ids
     """
-    from core.transaction_id_generator import TransactionIdGenerator
+    from shared_libs.transaction_id_generator import TransactionIdGenerator
     
     # Use a single generator instance for collision tracking
     id_generator = TransactionIdGenerator()
@@ -272,7 +272,7 @@ def batch_convert_api_to_beancount(api_transactions: List[Transaction], source_a
         bc_txn = api_transaction_to_beancount(api_txn, source_account)
         
         # Generate transaction_id with collision tracking
-        from core.transaction_id_generator import add_transaction_id_to_beancount_transaction
+        from shared_libs.transaction_id_generator import add_transaction_id_to_beancount_transaction
         bc_txn_with_id = add_transaction_id_to_beancount_transaction(
             transaction=bc_txn,
             strict_validation=True,
