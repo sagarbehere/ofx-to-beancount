@@ -2,9 +2,53 @@
 
 ## Overview
 
-The `transaction_id_generator.py` module has been significantly improved to ensure perfect consistency across all codebases using it. This guide helps developers migrate from the legacy API to the new streamlined interface.
+The `transaction_id_generator.py` module has been significantly improved to ensure perfect consistency across all codebases using it. This guide helps developers migrate from the legacy API to the new streamlined interface and explains how to obtain the generator for your projects.
 
-## Key Changes
+## Getting the Transaction ID Generator
+
+### New Distribution Method: Git Subtree
+
+The transaction ID generator is now distributed via git subtree, allowing you to include it directly in your project while keeping it updatable from the source.
+
+#### Initial Setup in Your Project
+
+```bash
+# Add the transaction ID generator to your project
+git subtree add --prefix=shared/transaction_id_generator \
+  https://github.com/sagarbehere/ofx-to-beancount.git transaction-id-generator-only \
+  --squash
+
+# Create __init__.py to make shared a Python package
+echo "# Shared modules package" > shared/__init__.py
+
+# Commit the changes
+git add .
+git commit -m "Add transaction ID generator via git subtree"
+```
+
+This creates the following structure in your project:
+```
+your-project/
+├── shared/
+│   ├── __init__.py
+│   └── transaction_id_generator/
+│       ├── __init__.py
+│       ├── transaction_id_generator.py
+│       └── README.md
+└── ... your other files
+```
+
+#### Pulling Updates
+
+When updates are available:
+
+```bash
+git subtree pull --prefix=shared/transaction_id_generator \
+  https://github.com/sagarbehere/ofx-to-beancount.git transaction-id-generator-only \
+  --squash
+```
+
+## Key Changes in v2.0
 
 ### Before (Legacy API):
 - Callers manually extracted individual fields (date, payee, amount, account)
@@ -20,18 +64,46 @@ The `transaction_id_generator.py` module has been significantly improved to ensu
 
 ## Migration Steps
 
-### 1. Update Dependencies
+### 1. Add the Transaction ID Generator to Your Project
+
+```bash
+# If you haven't already, add via git subtree
+git subtree add --prefix=shared/transaction_id_generator \
+  https://github.com/sagarbehere/ofx-to-beancount.git transaction-id-generator-only \
+  --squash
+```
+
+### 2. Update Your Imports
+
+**Old Import (if you had a local copy):**
+```python
+from core.transaction_id_generator import generate_single_transaction_id
+# or
+from utils.transaction_id_generator import TransactionIdGenerator
+# or any other local path
+```
+
+**New Import (from git subtree):**
+```python
+from shared.transaction_id_generator import (
+    TransactionIdGenerator,
+    add_transaction_id_to_beancount_transaction,
+    generate_single_transaction_id  # Still available but deprecated
+)
+```
+
+### 3. Update Dependencies
 
 Ensure you have access to the Beancount library:
 ```python
 from beancount.core.data import Transaction as BeancountTransaction
 ```
 
-### 2. Use the New Primary Function
+### 4. Use the New Primary Function
 
 **Old Way:**
 ```python
-from core.transaction_id_generator import generate_single_transaction_id
+from shared.transaction_id_generator import generate_single_transaction_id
 
 # Manual field extraction and account selection
 transaction_id = generate_single_transaction_id(
@@ -45,7 +117,7 @@ transaction_id = generate_single_transaction_id(
 
 **New Way:**
 ```python
-from core.transaction_id_generator import add_transaction_id_to_beancount_transaction
+from shared.transaction_id_generator import add_transaction_id_to_beancount_transaction
 
 # Pass complete Beancount transaction - everything is handled internally
 transaction_with_id = add_transaction_id_to_beancount_transaction(
@@ -58,7 +130,7 @@ transaction_with_id = add_transaction_id_to_beancount_transaction(
 transaction_id = transaction_with_id.meta['transaction_id']
 ```
 
-### 3. Account Selection is Now Automatic
+### 5. Account Selection is Now Automatic
 
 The new API automatically selects the appropriate account using standardized priority logic:
 
@@ -69,7 +141,7 @@ The new API automatically selects the appropriate account using standardized pri
 
 This ensures all codebases use identical account selection logic.
 
-### 4. Batch Processing
+### 6. Batch Processing
 
 For processing multiple transactions with collision tracking:
 
@@ -83,7 +155,10 @@ for txn in transactions:
 
 **New Way:**
 ```python
-from core.transaction_id_generator import TransactionIdGenerator
+from shared.transaction_id_generator import (
+    TransactionIdGenerator,
+    add_transaction_id_to_beancount_transaction
+)
 
 generator = TransactionIdGenerator()
 processed_transactions = []
@@ -98,10 +173,10 @@ for beancount_txn in beancount_transactions:
 
 ## Complete Example Migration
 
-### Before: Manual Processing
+### Before: Manual Processing with Local Copy
 ```python
 # Legacy approach - manual field extraction
-from core.transaction_id_generator import generate_single_transaction_id
+from my_utils.transaction_id_generator import generate_single_transaction_id
 from decimal import Decimal
 
 def process_transaction_legacy(api_transaction):
@@ -123,10 +198,10 @@ def process_transaction_legacy(api_transaction):
     return transaction_id
 ```
 
-### After: Beancount-Based Processing  
+### After: Beancount-Based Processing with Git Subtree  
 ```python
 # New approach - Beancount objects ensure consistency
-from core.transaction_id_generator import add_transaction_id_to_beancount_transaction
+from shared.transaction_id_generator import add_transaction_id_to_beancount_transaction
 from beancount.core.data import Transaction, Posting, Amount
 from decimal import Decimal
 from datetime import datetime
@@ -175,6 +250,26 @@ def api_to_beancount_transaction(api_txn):
     )
 ```
 
+## For Projects Not Using Beancount
+
+If your project doesn't use Beancount, you can still use the basic generator:
+
+```python
+from shared.transaction_id_generator import TransactionIdGenerator
+
+# Create generator instance
+generator = TransactionIdGenerator()
+
+# Generate IDs without Beancount objects
+txn_id = generator.generate_id(
+    date="2024-01-15",
+    payee="STORE NAME",
+    amount="-100.00 USD",
+    mapped_account="Expenses:Shopping",
+    narration="Purchase description"
+)
+```
+
 ## Core Benefits
 
 ### 1. Perfect Consistency
@@ -185,15 +280,20 @@ All codebases using Beancount objects will generate **identical transaction IDs*
 - Field extraction is consistent
 - Future improvements benefit all users
 
-### 3. Source Account Preservation
+### 3. Automatic Updates
+- Pull latest improvements with git subtree
+- No manual copying of files
+- Version controlled distribution
+
+### 4. Source Account Preservation
 The `source_account` metadata ensures that the original OFX source account is preserved and used consistently.
 
-### 4. Backward Compatibility
+### 5. Backward Compatibility
 Legacy functions still exist but are deprecated. The new API is the recommended approach.
 
 ## API Reference
 
-### Primary Function
+### Primary Function (Beancount)
 ```python
 def add_transaction_id_to_beancount_transaction(
     transaction: BeancountTransaction,
@@ -211,6 +311,19 @@ def add_transaction_id_to_beancount_transaction(
 
 **Returns:**
 - New Beancount transaction with `transaction_id` metadata added
+
+### Basic Generator Class
+```python
+class TransactionIdGenerator:
+    def generate_id(self, 
+                   date: str, 
+                   payee: str, 
+                   amount: Union[str, Decimal, float], 
+                   mapped_account: str, 
+                   narration: str = "",
+                   is_kept_duplicate: bool = False,
+                   strict_validation: bool = False) -> str
+```
 
 ### Account Selection Logic
 The function automatically selects accounts using this priority:
@@ -232,6 +345,8 @@ Verify your migration works correctly:
 
 ```python
 def test_transaction_id_consistency():
+    from shared.transaction_id_generator import add_transaction_id_to_beancount_transaction
+    
     # Create identical Beancount transactions
     txn1 = create_test_transaction()
     txn2 = create_test_transaction()
@@ -244,6 +359,8 @@ def test_transaction_id_consistency():
     assert result1.meta['transaction_id'] == result2.meta['transaction_id']
     
     # Should match legacy computation (if same inputs)
+    from shared.transaction_id_generator import generate_single_transaction_id
+    
     legacy_id = generate_single_transaction_id(
         date=result1.date.strftime('%Y-%m-%d'),
         payee=result1.payee,
@@ -256,20 +373,37 @@ def test_transaction_id_consistency():
 
 ## Migration Checklist
 
-- [ ] Update imports to use `add_transaction_id_to_beancount_transaction`
-- [ ] Convert your transaction data to `beancount.core.data.Transaction` objects
+- [ ] Add transaction ID generator via git subtree to your project
+- [ ] Create `shared/__init__.py` file
+- [ ] Update imports to use `shared.transaction_id_generator`
+- [ ] Convert your transaction data to `beancount.core.data.Transaction` objects (if using Beancount)
 - [ ] Remove manual account selection logic
 - [ ] Remove manual field extraction code
 - [ ] Use shared `TransactionIdGenerator` instance for batch processing
 - [ ] Test that transaction IDs are consistent with other tools
-- [ ] Verify that `source_account` metadata is preserved
-- [ ] Update documentation to reflect new API usage
+- [ ] Verify that `source_account` metadata is preserved (if applicable)
+- [ ] Update your documentation to reflect new import paths
+
+## Keeping Your Copy Updated
+
+To get the latest improvements:
+
+```bash
+# Check for updates periodically
+git subtree pull --prefix=shared/transaction_id_generator \
+  https://github.com/sagarbehere/ofx-to-beancount.git transaction-id-generator-only \
+  --squash
+
+# Resolve any conflicts if necessary
+git add .
+git commit -m "Update transaction ID generator to latest version"
+```
 
 ## Support
 
 For questions about migration or issues with the new API, refer to:
-- `dev-docs/specification_transactionID.md` for detailed technical specifications
-- `core/transaction_id_generator.py` source code for implementation details  
-- `utils/add_transaction_ids.py` for a reference implementation
+- `shared/transaction_id_generator/README.md` in your project for usage instructions
+- [ofx-to-beancount repository](https://github.com/sagarbehere/ofx-to-beancount) for source code
+- `dev-docs/subtree-workflow.md` in the source repository for distribution details
 
 The new API ensures perfect transaction ID consistency across all tools while simplifying the integration process.
